@@ -10,6 +10,8 @@ function Data:Init()
     db.settings = db.settings or {}
     db.settings.minimap = db.settings.minimap or {}
     if db.settings.shareMats == nil then db.settings.shareMats = false end
+    db.settings.filters = db.settings.filters or {}   -- fanernes flueben og sortering (se UI.Saved)
+    db.settings.profHint = db.settings.profHint or {}  -- ["Char-Realm/Alchemy"] = true: hint vist i chatten
     db.myChars = db.myChars or {}
     db.mains = db.mains or {}       -- [realm] = valgt main-nøgle
     db.guilds = db.guilds or {}
@@ -158,6 +160,50 @@ function Data:UpdateRanks()
     end
     if changed then
         self:MeChanged("info")
+    end
+end
+
+-- Crafting-professions, man har lært, men hvis vindue aldrig har været åbnet på denne char: så er der
+-- ingen recipes at dele, og intet andet fortæller en det (fundet i UX-gennemgangen). Sorteret efter navn.
+-- Mining er ikke med: Smelting-vinduet har sit eget navn, og de fleste miner uden at åbne det.
+local SCANNABLE = {
+    ["Alchemy"] = true, ["Blacksmithing"] = true, ["Enchanting"] = true, ["Engineering"] = true,
+    ["Jewelcrafting"] = true, ["Leatherworking"] = true, ["Tailoring"] = true, ["Cooking"] = true,
+    ["First Aid"] = true,
+}
+
+function Data:UnscannedProfessions()
+    local me = self:GetMe()
+    local names = {}
+    for name in pairs(ns.Compat.GetSkillRanks()) do
+        local prof = me.profs[name]
+        if SCANNABLE[name] and not (prof and (prof.scanned or next(prof.items or {}) or next(prof.enchants or {}))) then
+            table.insert(names, name)
+        end
+    end
+    table.sort(names)
+    return names
+end
+
+-- "Alchemy", "Alchemy and Enchanting", "Alchemy, Cooking and Enchanting".
+function Data.JoinNames(names)
+    if #names <= 1 then return names[1] or "" end
+    return table.concat(names, ", ", 1, #names - 1) .. " and " .. names[#names]
+end
+
+-- Én linje i chatten pr. profession pr. char; derefter står hintet kun øverst i Crafting-fanen.
+function Data:HintUnscanned()
+    local _, key = self:GetMe()
+    local fresh = {}
+    for _, name in ipairs(self:UnscannedProfessions()) do
+        local id = key .. "/" .. name
+        if not ns.db.settings.profHint[id] then
+            ns.db.settings.profHint[id] = true
+            table.insert(fresh, name)
+        end
+    end
+    if #fresh > 0 then
+        ns:Print(string.format("Open %s once, so the guild can see your recipes.", Data.JoinNames(fresh)))
     end
 end
 
@@ -406,6 +452,8 @@ end
 ns:On("LOGIN", function()
     Data:RefreshBasics()
     Data:UpdateRanks()
+    -- Lidt efter login, så Skills-listen er indlæst, og linjen ikke drukner i login-beskederne.
+    C_Timer.After(8, function() Data:HintUnscanned() end)
 end)
 ns:RegisterEvent("SKILL_LINES_CHANGED", function()
     if ns.loggedIn then Data:UpdateRanks() end

@@ -31,7 +31,7 @@ function UI.ItemClick(item, button, row, onRightClick)
 end
 
 -- opts: top, left, height (ellers til bunden over footeren), rowHeight, onRightClick(item, button, row),
---       onEnter(item, row), buttons = { { text, tooltip, onClick(item) } } (små knapper til højre)
+--       onEnter(item, row)
 function UI.CreateList(content, name, opts)
     local list = { items = {}, rows = {} }
     local rowHeight = opts.rowHeight or 36
@@ -71,9 +71,6 @@ function UI.CreateList(content, name, opts)
         FauxScrollFrame_OnVerticalScroll(self, offset, rowHeight, Update)
     end)
 
-    local buttons = opts.buttons or {}
-    local buttonSpace = #buttons * 22
-
     for i = 1, math.floor(height / rowHeight) do
         local row = CreateFrame("Button", nil, content)
         row:SetFrameLevel(scroll:GetFrameLevel() + 2)
@@ -98,7 +95,7 @@ function UI.CreateList(content, name, opts)
 
         local textLeft = rowHeight + 6
         row.right = row:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
-        row.right:SetPoint("TOPRIGHT", -6 - buttonSpace, -5)
+        row.right:SetPoint("TOPRIGHT", -6, -5)
         row.right:SetJustifyH("RIGHT")
 
         row.title = row:CreateFontString(nil, "ARTWORK", "GameFontNormal")
@@ -109,25 +106,9 @@ function UI.CreateList(content, name, opts)
 
         row.sub = row:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
         row.sub:SetPoint("TOPLEFT", textLeft, -20)
-        row.sub:SetPoint("RIGHT", -6 - buttonSpace, 0)
+        row.sub:SetPoint("RIGHT", -6, 0)
         row.sub:SetJustifyH("LEFT")
         row.sub:SetWordWrap(false)
-
-        for b, def in ipairs(buttons) do
-            local btn = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
-            btn:SetSize(20, 20)
-            btn:SetPoint("RIGHT", -4 - (#buttons - b) * 22, 0)
-            btn:SetText(def.text)
-            btn:SetScript("OnClick", function()
-                if row.item then def.onClick(row.item) end
-            end)
-            btn:SetScript("OnEnter", function(self)
-                GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-                GameTooltip:AddLine(def.tooltip)
-                GameTooltip:Show()
-            end)
-            btn:SetScript("OnLeave", HideTooltip)
-        end
 
         row:SetScript("OnClick", function(self, button)
             UI.ItemClick(self.item, button, self, opts.onRightClick)
@@ -146,17 +127,6 @@ function UI.CreateList(content, name, opts)
         self.empty:SetText(emptyText or "")
         self.empty:SetShown(#items == 0)
         Update()
-    end
-
-    -- Skjul/vis hele listen (Crafting skifter til profession-visning, når en person er valgt).
-    function list:SetShown(shown)
-        self.scroll:SetShown(shown)
-        if shown then
-            Update()
-        else
-            for _, row in ipairs(self.rows) do row:Hide() end
-            self.empty:Hide()
-        end
     end
 
     return list
@@ -202,6 +172,69 @@ function UI.CreateSearchBox(content, name, width, hint, onChange)
     end)
     box:SetScript("OnEnterPressed", function(self) self:ClearFocus() end)
     return box
+end
+
+-- Søgefelter, der tager imod et shift-klikket item (som søgefeltet i auktionshuset): navnet sættes
+-- ind i det felt, der er synligt. setQuery(text) sætter fanens søgning med det samme, fordi
+-- OnTextChanged først kommer næste frame i spillet.
+local linkBoxes = {}
+function UI.AcceptItemLinks(box, setQuery)
+    table.insert(linkBoxes, { box = box, setQuery = setQuery })
+end
+
+ns.Compat.HookLinkInsert(function(link)
+    -- Kun items og recipes; quest-, spiller- og andre links går samme vej og skal ikke havne her.
+    local kind = link:match("|H(%a+):")
+    local name = (kind == "item" or kind == "enchant" or kind == "spell") and link:match("|h%[(.-)%]|h")
+    if not name then return false end
+    for _, entry in ipairs(linkBoxes) do
+        if entry.box:IsVisible() then
+            entry.setQuery(name)
+            if entry.box:GetText() ~= name then entry.box:SetText(name) end
+            return true
+        end
+    end
+    return false
+end)
+
+-- Fanernes flueben og sortering huskes mellem sessioner: UI.Saved("roster", { onlyOnline = false })
+-- returnerer tabellen i SavedVariables med standardværdier fyldt ind.
+function UI.Saved(name, defaults)
+    local filters = ns.db.settings.filters
+    filters[name] = filters[name] or {}
+    for key, value in pairs(defaults) do
+        if filters[name][key] == nil then filters[name][key] = value end
+    end
+    return filters[name]
+end
+
+-- Kolonneoverskrift, der sorterer ved klik og viser en pil, når den er aktiv (som i auktionshuset).
+-- header:SetSort(nil) skjuler pilen; SetSort(false) = stigende, SetSort(true) = faldende.
+function UI.CreateSortHeader(parent, label, width, onClick)
+    local header = CreateFrame("Button", nil, parent)
+    header:SetSize(width, 18)
+    header.text = header:CreateFontString(nil, "ARTWORK", "GameFontNormalSmall")
+    header.text:SetPoint("LEFT", 0, 0)
+    header.text:SetText(label)
+    header.arrow = header:CreateTexture(nil, "ARTWORK")
+    header.arrow:SetTexture("Interface\\Buttons\\UI-SortArrow")
+    header.arrow:SetSize(9, 8)
+    header.arrow:SetPoint("LEFT", header.text, "RIGHT", 3, -1)
+    header.arrow:Hide()
+    header:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
+    header:SetScript("OnClick", function()
+        PlaySound(SOUNDKIT and SOUNDKIT.IG_MAINMENU_OPTION_CHECKBOX_ON or 856)
+        onClick()
+    end)
+    function header:SetSort(descending)
+        self.arrow:SetShown(descending ~= nil)
+        if descending then
+            self.arrow:SetTexCoord(0, 0.5625, 1, 0)
+        else
+            self.arrow:SetTexCoord(0, 0.5625, 0, 1)
+        end
+    end
+    return header
 end
 
 function UI.CreateCheck(content, label, onClick)

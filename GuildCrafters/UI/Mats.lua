@@ -3,9 +3,10 @@ local _, ns = ...
 -- Mats-fanen: hvem har hvilke crafting-mats (tasker, bank, guild bank)?
 local UI = ns.UI
 local MAX_RESULTS = 300
+local MAX_HOLDERS = 4       -- navne på en række; resten som "+N more" (alle står i tooltippen)
 
 local query = ""
-local onlyCraftList = false
+local filters               -- gemmes mellem sessioner (UI.Saved): onlyCraftList
 local list, countText, shareCheck
 
 -- De mats, ens craft-liste skal bruge: { [itemID] = true }.
@@ -33,8 +34,12 @@ end
 
 local function Line(id)
     local parts = {}
-    for _, h in ipairs(ns.Index:Holders(id)) do
-        table.insert(parts, HolderText(h))
+    local holders = ns.Index:Holders(id)
+    for i = 1, math.min(#holders, MAX_HOLDERS) do
+        table.insert(parts, HolderText(holders[i]))
+    end
+    if #holders > MAX_HOLDERS then
+        table.insert(parts, string.format("|cffaaaaaa+%d more|r", #holders - MAX_HOLDERS))
     end
     local bank = ns.Index:GuildBankCount(id)
     if bank > 0 then
@@ -63,12 +68,13 @@ local function Refresh()
     shareCheck:SetChecked(ns.db.settings.shareMats)
 
     local needle = query:lower()
+    local onlyCraftList = filters.onlyCraftList
     local wanted = onlyCraftList and CraftListMats()
     local results = {}
     for _, id in ipairs(ns.Index:AllMats()) do
         local name = ns.Compat.ItemName(id)
         if (not wanted or wanted[id]) and (needle == "" or (name and name:lower():find(needle, 1, true))) then
-            table.insert(results, { id = id, name = name or ("item:" .. id) })
+            table.insert(results, { id = id, name = name or "Loading..." })
         end
     end
     table.sort(results, function(a, b) return a.name < b.name end)
@@ -89,8 +95,8 @@ local function Refresh()
         })
     end
 
-    countText:SetText(string.format("%d mats · bags and bank are shared by those who turned on \"Share my mats\"",
-        #results))
+    countText:SetText(string.format("%d mat%s · bags and bank are shared by those who turned on \"Share my mats\"",
+        #results, #results == 1 and "" or "s"))
     local emptyText
     if onlyCraftList and #ns.db.craftList == 0 then
         emptyText = "Your craft list is empty."
@@ -105,8 +111,15 @@ local function Refresh()
 end
 
 local function Build(content)
-    UI.CreateSearchBox(content, "GuildCraftersMatsSearch", 200, "Search mats, e.g. \"thorium\"", function(text)
-        query = text
+    filters = UI.Saved("mats", { onlyCraftList = false })
+
+    local box = UI.CreateSearchBox(content, "GuildCraftersMatsSearch", 200, "Search mats, e.g. \"thorium\"",
+        function(text)
+            query = text
+            Refresh()
+        end)
+    UI.AcceptItemLinks(box, function(name)
+        query = name
         Refresh()
     end)
 
@@ -130,10 +143,11 @@ local function Build(content)
     shareCheck:SetScript("OnLeave", function() GameTooltip:Hide() end)
 
     local craftListCheck = UI.CreateCheck(content, "Only my craft list", function(checked)
-        onlyCraftList = checked
+        filters.onlyCraftList = checked
         Refresh()
     end)
     craftListCheck:SetPoint("TOPLEFT", 360, -2)
+    craftListCheck:SetChecked(filters.onlyCraftList)
 
     countText = UI.CreateFooter(content)
 

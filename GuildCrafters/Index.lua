@@ -131,7 +131,7 @@ local function SortKeys(keys)
     return sorted
 end
 
--- Alle med addonen, der kan crafte noget, sorteret efter navn: { { key, count }, ... }
+-- Alle med addonen, der kan crafte noget, online først og derefter efter navn: { { key, count }, ... }
 function Index:CrafterList()
     Ensure()
     local counts = {}
@@ -140,7 +140,11 @@ function Index:CrafterList()
     end
     local list = {}
     for key, n in pairs(counts) do table.insert(list, { key = key, count = n }) end
-    table.sort(list, function(a, b) return a.key < b.key end)
+    table.sort(list, function(a, b)
+        local oa, ob = Index:IsOnline(a.key), Index:IsOnline(b.key)
+        if oa ~= ob then return oa end
+        return a.key < b.key
+    end)
     return list
 end
 

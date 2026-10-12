@@ -1,6 +1,6 @@
 local _, ns = ...
 
--- Tilføjer "Kan craftes af" og "Mats hos" på item-tooltips.
+-- Tilføjer "Crafted by" og "Guild has" på item-tooltips.
 local MAX_NAMES = 4
 
 local function Colored(key)
@@ -30,8 +30,14 @@ local function AddCrafters(tooltip, itemID)
     return true
 end
 
+-- Hvem i guilden har tingen (delte mats + guild bank). Den char, man selv spiller, er ikke med: det
+-- står allerede i taskerne. Ens alts er med.
 local function AddHolders(tooltip, itemID)
-    local list = ns.Index:Holders(itemID)
+    local me = ns.Compat.PlayerKey()
+    local list = {}
+    for _, h in ipairs(ns.Index:Holders(itemID)) do
+        if h.key ~= me then table.insert(list, h) end
+    end
     local bank = ns.Index:GuildBankCount(itemID)
     if #list == 0 and bank == 0 then return false end
 
@@ -45,7 +51,7 @@ local function AddHolders(tooltip, itemID)
         table.insert(parts, "Guild bank " .. bank)
         total = total + 1
     end
-    tooltip:AddLine("|cff33ff99Mats:|r " .. Join(parts, total), 1, 1, 1, true)
+    tooltip:AddLine("|cff33ff99Guild has:|r " .. Join(parts, total), 1, 1, 1, true)
     return true
 end
 

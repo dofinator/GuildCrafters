@@ -1,6 +1,6 @@
 # GuildCrafters – SPEC v0.9
 
-> **Status:** v0.13.0. Alle faser + Crafting-fane med kategorier, stats-søgning, reagents-sync og Craft List.
+> **Status:** v0.14.0 (UX-gennemgang: Crafting som auktionshuset, se §7). Alle faser + Crafting-fane med kategorier, stats-søgning, reagents-sync og Craft List.
 > Testet i simulatoren (`tools/sim`, 59 tjek). Fase 1–2 og UI er også set i TBC Anniversary.
 > Mangler: rigtig test med flere spillere i guilden.
 
@@ -20,7 +20,7 @@ over GUILD.
 |---|---------|----|
 | 1 | Roster: class, spec, rolle, level, professions og online-status | ✔ |
 | 2 | Crafter-opslag: søg fx "Flask" og se hvem, der kan crafte det | ✔ |
-| 3 | Tooltip: "Kan craftes af: X, Y" | ✔ |
+| 3 | Tooltip: "Crafted by: X, Y" | ✔ |
 | 4 | Mats-deling: hvem har hvilke crafting-mats | ✔ (opt-in) |
 
 **Out of scope:** ekstern server/web, cross-guild-sync, crafting-ordrer og auktionspriser.
@@ -64,7 +64,7 @@ GuildCrafters/
   Sync.lua         HELLO/INVR/REQ/DATA/GBANK, jitter, relay, online-status
   Mats.lua         scan af tasker, bank og guild bank, opt-in
   Index.lua        opslag: hvem crafter hvad, hvem har hvilke mats
-  Tooltip.lua      "Kan craftes af" og "Mats hos"
+  Tooltip.lua      "Crafted by" og "Guild has"
   UI/Frame.lua     vindue, faner, fælles hjælpere (ikoner, farver)
   UI/List.lua      liste med to linjer pr. række, søgefelt, whisper-menu
   UI/Roster.lua  UI/Search.lua  UI/Mats.lua
@@ -202,6 +202,13 @@ med spillets egne knapper, skrifttyper og scrollbars. Der er ingen egen grafik.
 - Den sidst valgte fane huskes.
 
 **Adgang:** `/gc`, minimap-knap (LibDBIcon, kan slås fra) og en knap i guild-vinduet.
+- `/gc <tekst>` (alt, der ikke er en kommando) åbner Crafting med søgningen udfyldt: `/gc flask`. Et
+  shift-klikket item (`/gc [Flask of the Titans]`) bliver til sit navn.
+- Login-linjen i chatten ("v0.14.0 loaded ...") vises kun første gang og efter en opdatering.
+
+**Huskede valg:** Fanernes flueben og sortering gemmes i `db.settings.filters` (`UI.Saved`): Roster
+(Online only, filter, sortering), Crafting (Usable items, Online crafters only, sortering) og Mats
+(Only my craft list). Søgetekst og valgt kategori huskes ikke.
 
 **Roster:**
 - Hver række har:
@@ -211,40 +218,61 @@ med spillets egne knapper, skrifttyper og scrollbars. Der er ingen egen grafik.
   - level
   - profession-ikoner med rank
 - Medlemmer uden addonen er grå.
-- Toppen har søgefelt, filter (rolle/profession) og "Online only". Man kan sortere ved at klikke på
-  kolonnenavnene.
-- Højreklik giver Whisper, Invite, Show recipes (åbner Crafting med personen valgt under "By crafter"),
-  Set role og Set as main. Venstreklik gør ingenting (en direkte whisper på venstreklik var irriterende).
+- Rækkefølge: online først, derefter dem med addonen (i en guild med flere hundrede medlemmer drukner
+  de ellers), derefter den valgte kolonne. Klik på et kolonnenavn sorterer; en pil viser den aktive
+  kolonne og retningen.
+- Toppen har søgefelt (med x og Esc-ryd som de andre faner), filter (rolle/profession) og "Online
+  only". Søgningen dækker navn, main, class, rolle og professions ("alch", "priest", "tank"); flere ord
+  skal alle passe.
+- Højreklik giver kun det, der giver mening for rækken: Whisper (ikke på en selv), Invite (kun online,
+  ikke en selv), Show recipes (åbner Crafting med personen valgt under "By crafter"), og på ens egen
+  række Set role med "(current)" ud for det nuværende valg. "Set as main" vises på ens andre chars.
+  Venstreklik gør ingenting (en direkte whisper på venstreklik var irriterende).
+- Tooltippen viser for offline medlemmer "Last online: 3 days ago" og guild-noten, hvis der er en.
 
-**Crafting** (som auktionshuset):
+**Crafting** (som auktionshuset; brugeren bad i v0.14 om, at fanen ligner AH mest muligt, og valgte
+layoutet ud fra mockups: én linje pr. recipe, filterlinje med "Usable items" og Reset):
 ```
-+-------------------+--------------------------------------------+
-| [Search name or stats...]   [x] Online crafters only           |
-|-------------------+--------------------------------------------|
-| All recipes   52  | [i] Flask of the Titans         lvl 50  [+]|
-| - Consumables 18  |     Anna, Kim (alt of Bob)                 |
-|     Flasks     4  | [i] Flask of Supreme Power      lvl 50  [+]|
-|     Potions   12  |     Anna                                   |
-| + Armor       20  |                                            |
-| + Enchants    14  |                                            |
-| + By crafter   6  |                                            |
-+-------------------+--------------------------------------------+
-| 4 of 52 recipes · Consumables > Flasks                         |
++------------------------------------------------------------------------+
+| [Search name or stats...  x] [ ] Usable items [ ] Online crafters only [Reset]
+| Open Enchanting once, so the guild can see your recipes.   (kun når relevant)
+|-------------------+----------------------------------------------------|
+| All recipes   52  | Name ^                    Lvl  Crafters            |
+| - Consumables 18  | [i] Flask of the Titans    50  Anna, Kim        [+]|
+|     Flasks     4  | [i] Flask of Supreme Pow.  50  Anna          x2 [+]|
+|     Potions   12  | [i] Major Healing Potion   45  Anna, Bob +2     [+]|
+| + Armor       20  |                                                    |
+| + By crafter   6  |                                                    |
++-------------------+----------------------------------------------------+
+| 4 of 52 recipes · Consumables > Flasks                                 |
 ```
+- Kolonner: **Name** (quality-farve), **Lvl** (required level; tom for enchants og ting uden krav) og
+  **Crafters** (korte navne, online i grøn og først, højst to og derefter "+N"; alle står i tooltippen
+  og højreklik-menuen). Klik på en overskrift sorterer, klik igen vender; pilen viser den aktive.
+  Crafters-sorteringen sætter det, en anden online kan lave nu, øverst. Ca. 18 rækker ad gangen.
+- "x2" i grøn foran `[+]` betyder, at recipen står på ens craft-liste (tooltippen siger det også).
+- **Usable items** (som i AH): kun det, ens level kan bruge. **Reset** rydder søgning, flueben og valgt
+  kategori/person; sorteringen bliver.
+- Shift-klik på et item i taskerne eller et link i chatten, mens chatboksen er lukket, sætter itemets
+  navn i søgefeltet (som i AH). Det samme gælder Mats-fanens søgefelt. Efter-hook på
+  `ChatEdit_InsertLink` (`Compat.HookLinkInsert`); spillet åbner selv "split stack" for stakke, og det
+  vindue lukkes igen.
+- Har man en crafting-profession, hvis vindue aldrig har været åbnet på denne char, står der en gul
+  linje under filterlinjen (og én gang i chatten ca. 8 sek. efter login): uden et scan er der ingen
+  recipes at dele, og intet andet fortalte en det. Listen rykker en linje ned, mens hintet vises.
 - Kategorier bestemmes af item class/subclass, som er sproguafhængige:
   - Consumables: Flasks, Potions, Elixirs, Food & Drink, Bandages
   - Armor: Cloth, Leather, Mail, Plate, Cloaks, Shields
   - Weapons, Gems, Bags, Trade Goods og Ammo
   - Enchants deles op efter slot ud fra navnet: "Enchant **Bracer** - ...".
-  - "By crafter" viser alt, hvad én person kan lave, i **profession-visning** (valgt af brugeren ud fra
-    tre mockups): højre side grupperes pr. profession med rank ("TAILORING 287/375", primære først, så
-    Cooking/First Aid) og derunder kategorier (underkategori for Consumables/Enchants som "Flasks",
-    ellers hovedkategori som "Armor"), med én linje pr. recipe og `[+]`. Overskrifter folder ind/ud ved
-    klik. Rosterens højreklik "Show recipes" åbner samme visning.
+  - "By crafter" (online først) viser alt, hvad én person kan lave, i **profession-visning** (valgt af
+    brugeren ud fra tre mockups): højre side grupperes pr. profession med rank ("TAILORING 287/375",
+    primære først, så Cooking/First Aid) og derunder kategorier (underkategori for
+    Consumables/Enchants som "Flasks", ellers hovedkategori som "Armor"), med de samme rækker og
+    kolonner som ellers (uden Crafters, da alle rækker har samme crafter). Overskrifter folder ind/ud
+    ved klik. Rosterens højreklik "Show recipes" åbner samme visning.
 - Søgefeltet søger i navn og hele tooltip-teksten (stats, effekter, slot og type). Teksten læses med et
   skjult tooltip og caches. Flere ord skal alle passe, fx "flask tit" eller "fire res".
-- Navne står i quality-farve med `lvl` (required level) eller `ilvl`. Crafters står under navnet, med
-  online-crafters i grøn og først.
 - Når man holder musen over en række, ser man den fulde item-tooltip med "Crafted by" og reagents.
   Reagents vises med "you have N" i grøn eller rød.
 - Klik på items (Crafting, Craft List og Mats) som i resten af spillet: **højreklik** giver en menu med
@@ -257,9 +285,10 @@ med spillets egne knapper, skrifttyper og scrollbars. Der er ingen egen grafik.
   - Craft List, mat: "Hi! Could you spare 4x [Linen Cloth]? I need it for Bolt of Linen Cloth." (antal =
     det, man mangler).
   - Mats: "Hi! Do you have any [Thorium Ore] to spare?"
-- `[+]` lægger itemet på craft-listen; shift-klik lægger 5 på. Recipes, der allerede er på listen, viser
-  "On list x2" (grøn) til højre.
-- Søgefeltet (Crafting og Mats) har et lille "x", og Esc rydder søgningen.
+- `[+]` lægger itemet på craft-listen; shift-klik lægger 5 på. Står recipen allerede på listen, har
+  højreklik-menuen også "Remove from craft list".
+- Søgefelterne (alle faner) har et lille "x", og Esc rydder søgningen.
+- Mens item-navne hentes fra serveren (kold cache), står der "Loading recipes..." og ikke "Nothing here".
 
 **Craft List** (personlig, account-wide i `db.craftList`):
 - Grupperet pr. item (valgt af brugeren efter test i spillet, hvor én samlet mats-liste var uoverskuelig):
@@ -269,8 +298,12 @@ med spillets egne knapper, skrifttyper og scrollbars. Der er ingen egen grafik.
 - Need = antal × ceil(qty / made). You have = den aktuelle chars tasker og bank (`GetItemCount`) plus egne
   alts fra seneste scan. Bruger flere items samme mat, fordeles beholdningen ovenfra og ned, så den
   ikke tælles to gange. Grøn = nok, rød = mangler.
-- Guild has: op til tre andre (og guild banken) med antal, resten som "+N". "Nobody in the guild", hvis
-  ingen har det, og man mangler det.
+- Guild has: op til tre andre (og guild banken) med antal, resten som "+N". Mangler man en mat, som
+  ingen har, men som nogen kan crafte (fx Bolt of Linen Cloth til en vest), står der "Bob can craft it"
+  eller "You can craft it", og højreklik giver "Add 4x to craft list" og whisper til crafteren. Ellers
+  "Nobody in the guild".
+- Item-rækken viser crafteren i samme kolonne: "Crafter: Anna +1" ("You", hvis man selv kan; ét navn
+  og "+N", så rækken ikke bliver overlæsset; "No crafter in the guild", hvis ingen kan længere).
 - Øverst: "2 of 3 ready - 3 mats missing". Hover på et item viser tooltip med "Crafted by"; højreklik giver
   whisper til en crafter. Højreklik på en mat giver "Ask for X" til dem, der har den (online først).
 - Items, der er Ready, er foldet sammen til én linje, så det, man mangler, står tydeligt. `+`/`-`-knappen
@@ -278,7 +311,8 @@ med spillets egne knapper, skrifttyper og scrollbars. Der er ingen egen grafik.
 - `[-] [+]` ændrer antal med 1, shift-klik med 5 (shift-minus går ikke under 1). "Clear list" spørger først.
 
 **Mats:**
-- Samme layout, grupperet pr. mat: "Bob 40 (bags) · Anna 120 (bank) · Guild bank 200".
+- Samme layout, grupperet pr. mat: "Bob 40 (bags) · Anna 120 (bank) · Guild bank 200". Højst fire
+  navne pr. række, resten som "+N more" (alle står i tooltippen).
 - Tooltippen viser, hvornår hver kilde sidst er opdateret.
 - "Share my mats" slår deling til og fra.
 - "Only my craft list" viser kun de mats, ens craft-liste skal bruge.
@@ -286,9 +320,10 @@ med spillets egne knapper, skrifttyper og scrollbars. Der er ingen egen grafik.
 ## 8. Tooltip
 
 - `Compat.HookItemTooltip` bruger `TooltipDataProcessor`, hvis det findes, og ellers
-  `OnTooltipSetItem`. Den tilføjer "Kan craftes af: X, Y (+n)" på craftede items. Online-navne står i
+  `OnTooltipSetItem`. Den tilføjer "Crafted by: X, Y (+n)" på craftede items. Online-navne står i
   grøn og offline-navne i grå.
-- På mats vises "Mats hos: X 40, Guild bank 200" ud fra delte mats, egne mats og guild bank.
+- På mats vises "Guild has: X 40, Guild bank 200" ud fra delte mats, ens alts og guild bank. Den char,
+  man selv spiller, er ikke med (det står allerede i taskerne).
 - **Kendt begrænsning:** Recipe-, pattern- og formula-items kan ikke mappes til deres produkt via API'et.
   Det løses med en lille statisk tabel senere, eller udelades.
 
