@@ -54,13 +54,13 @@ function Compat.RequestGuildRoster()
     end
 end
 
--- Returnerer en liste af { key, level, class (fil-token), online, zone }.
+-- Returnerer en liste af { key, level, class (fil-token), online, zone, note, index }.
 function Compat.GetGuildMembers()
     local members = {}
     if not IsInGuild() then return members end
     local total = GetNumGuildMembers()
     for i = 1, total do
-        local name, _, _, level, _, zone, _, _, online, _, classFile = GetGuildRosterInfo(i)
+        local name, _, _, level, _, zone, note, _, online, _, classFile = GetGuildRosterInfo(i)
         if name then
             table.insert(members, {
                 key = Compat.FullName(name),
@@ -68,10 +68,28 @@ function Compat.GetGuildMembers()
                 class = classFile,
                 online = online and true or false,
                 zone = zone,
+                note = note ~= "" and note or nil,
+                index = i,
             })
         end
     end
     return members
+end
+
+-- "3 days" / "5 hours" siden et offline medlem sidst var online, eller nil hvis det ikke kan slås op.
+-- index er pladsen i rosteren fra GetGuildMembers; den kan flytte sig, så navnet tjekkes først.
+function Compat.GuildLastOnline(index, key)
+    if not GetGuildRosterLastOnline or not index then return nil end
+    local name = GetGuildRosterInfo(index)
+    if not name or Compat.FullName(name) ~= key then return nil end
+    local years, months, days, hours = GetGuildRosterLastOnline(index)
+    if not hours then return nil end
+    local function Unit(n, word) return string.format("%d %s%s", n, word, n == 1 and "" or "s") end
+    if (years or 0) > 0 then return Unit(years, "year") end
+    if (months or 0) > 0 then return Unit(months, "month") end
+    if (days or 0) > 0 then return Unit(days, "day") end
+    if hours > 0 then return Unit(hours, "hour") end
+    return "less than an hour"
 end
 
 -- Er key medlem af vores guild? Bruges til at afvise addon-whispers fra fremmede.
@@ -110,9 +128,35 @@ function Compat.Whisper(key, message)
 end
 
 -- Indsætter et link i den åbne chatboks (shift-klik).
+local insertingOwnLink = false
 function Compat.InsertLink(link)
     local insert = (ChatFrameUtil and ChatFrameUtil.InsertLink) or ChatEdit_InsertLink
-    return insert(link)
+    insertingOwnLink = true      -- vores egne shift-klik skal ikke havne i søgefeltet (se HookLinkInsert)
+    local ok, result = pcall(insert, link)
+    insertingOwnLink = false
+    return ok and result
+end
+
+-- Som i auktionshuset: shift-klik på et item (tasker, chat-links) uden åben chatboks kalder
+-- fn(link); returnerer fn true, har et synligt søgefelt taget imod navnet. Spillet åbner derefter selv
+-- "split stack" for stakke (linket blev jo ikke sat ind i chatten), så det vindue lukkes igen.
+-- Efter-hook (hooksecurefunc): at erstatte funktionen ville gøre chatten tainted.
+function Compat.HookLinkInsert(fn)
+    local function OnInsert(link)
+        if insertingOwnLink or type(link) ~= "string" then return end
+        local active = (ChatFrameUtil and ChatFrameUtil.GetActiveWindow) or ChatEdit_GetActiveWindow
+        if active and active() then return end
+        if fn(link) and C_Timer and StackSplitFrame then
+            C_Timer.After(0, function()
+                if StackSplitFrame:IsShown() then StackSplitFrame:Hide() end
+            end)
+        end
+    end
+    if ChatFrameUtil and ChatFrameUtil.InsertLink then
+        hooksecurefunc(ChatFrameUtil, "InsertLink", OnInsert)
+    elseif ChatEdit_InsertLink then
+        hooksecurefunc("ChatEdit_InsertLink", OnInsert)
+    end
 end
 
 function Compat.Invite(key)

@@ -14,16 +14,14 @@ local COLUMNS = {
     { key = "profs", label = "Professions", x = 372, width = 300 },
 }
 
-local state = {
-    search = "",
-    onlyOnline = false,
-    filter = nil,        -- nil, "TANK"/"HEALER"/"DPS" eller "PROF:<navn>"
-    sortKey = "name",
-    sortDesc = false,
-}
+-- Gemmes mellem sessioner (UI.Saved): onlyOnline, filter (false, "TANK"/"HEALER"/"DPS" eller
+-- "PROF:<navn>"), sortKey og sortDesc. Søgningen huskes ikke.
+local state
+local search = ""
 
 local list = {}
 local rows = {}
+local headers = {}
 local scroll, filterButton
 
 ------------------------------------------------------------------------
@@ -58,7 +56,8 @@ local function BuildEntries()
     local foundMe = false
 
     for _, m in ipairs(ns.Compat.GetGuildMembers()) do
-        local entry = { key = m.key, level = m.level, class = m.class, online = m.online, zone = m.zone }
+        local entry = { key = m.key, level = m.level, class = m.class, online = m.online, zone = m.zone,
+            note = m.note, index = m.index }
         if m.key == myKey then foundMe = true end
         if ns.db.myChars[m.key] then
             AttachMine(entry, ns.db.myChars[m.key])
@@ -86,7 +85,21 @@ local function HasProf(entry, profName)
     return entry.profs and entry.profs[profName] ~= nil
 end
 
-local function Matches(entry)
+local function ClassName(class)
+    return class and (LOCALIZED_CLASS_NAMES_MALE and LOCALIZED_CLASS_NAMES_MALE[class] or class) or nil
+end
+
+-- Alt, man kan søge på: navn, main, class, rolle og professions ("alch", "priest", "tank").
+local function SearchText(entry)
+    local parts = { ns.Compat.ShortName(entry.key) }
+    if entry.main then table.insert(parts, ns.Compat.ShortName(entry.main)) end
+    if entry.class then table.insert(parts, ClassName(entry.class)) end
+    if entry.role then table.insert(parts, UI.ROLE_NAMES[entry.role]) end
+    for name in pairs(entry.profs or {}) do table.insert(parts, name) end
+    return table.concat(parts, "\n"):lower()
+end
+
+local function Matches(entry, words)
     if state.onlyOnline and not entry.online then return false end
     if state.filter then
         local prof = state.filter:match("^PROF:(.+)$")
@@ -96,12 +109,10 @@ local function Matches(entry)
             return false
         end
     end
-    if state.search ~= "" then
-        local needle = state.search:lower()
-        local name = ns.Compat.ShortName(entry.key):lower()
-        local main = entry.main and ns.Compat.ShortName(entry.main):lower() or ""
-        if not name:find(needle, 1, true) and not main:find(needle, 1, true) then
-            return false
+    if #words > 0 then
+        local text = SearchText(entry)
+        for _, word in ipairs(words) do
+            if not text:find(word, 1, true) then return false end
         end
     end
     return true
@@ -124,9 +135,10 @@ local function SortValue(entry, key)
     return ns.Compat.ShortName(entry.key):lower()
 end
 
--- Online først, derefter valgt kolonne, derefter navn.
+-- Online først, så dem med addonen (i en stor guild drukner de ellers), så valgt kolonne og navn.
 local function Compare(a, b)
     if a.online ~= b.online then return a.online end
+    if (a.hasAddon or false) ~= (b.hasAddon or false) then return a.hasAddon or false end
     local va, vb = SortValue(a, state.sortKey), SortValue(b, state.sortKey)
     if va ~= vb then
         if state.sortDesc then return va > vb end
@@ -137,8 +149,10 @@ end
 
 local function BuildList()
     wipe(list)
+    local words = {}
+    for word in search:lower():gmatch("%S+") do table.insert(words, word) end
     for _, entry in ipairs(BuildEntries()) do
-        if Matches(entry) then
+        if Matches(entry, words) then
             table.insert(list, entry)
         end
     end
@@ -179,14 +193,19 @@ local function ShowTooltip(row)
     GameTooltip:AddLine(DisplayName(e))
 
     local spec = ns.Roles.SpecName(e.class, e.specTab)
-    local className = e.class and (LOCALIZED_CLASS_NAMES_MALE and LOCALIZED_CLASS_NAMES_MALE[e.class] or e.class) or "?"
-    GameTooltip:AddLine(string.format("Level %s %s%s", tostring(e.level or "?"), className,
+    GameTooltip:AddLine(string.format("Level %s %s%s", tostring(e.level or "?"), ClassName(e.class) or "?",
         spec and (" (" .. spec .. ")") or ""), 1, 1, 1)
     if e.role then
         GameTooltip:AddLine("Role: " .. UI.ROLE_NAMES[e.role], 1, 1, 1)
     end
     if e.online and e.zone then
         GameTooltip:AddLine(e.zone, 0.7, 0.7, 0.7)
+    elseif not e.online then
+        local ago = ns.Compat.GuildLastOnline(e.index, e.key)
+        if ago then GameTooltip:AddLine("Last online: " .. ago .. " ago", 0.7, 0.7, 0.7) end
+    end
+    if e.note then
+        GameTooltip:AddLine("Note: " .. e.note, 1, 0.82, 0, true)
     end
 
     if e.hasAddon then
@@ -208,30 +227,41 @@ local function ShowTooltip(row)
         GameTooltip:AddLine("Does not have GuildCrafters", 0.5, 0.5, 0.5)
     end
     GameTooltip:AddLine(" ")
-    GameTooltip:AddLine("Right-click: whisper, invite and more", 0.5, 0.5, 0.5)
+    local isMe = e.key == ns.Compat.PlayerKey()
+    GameTooltip:AddLine(isMe and "Right-click: show recipes, set role and main"
+        or "Right-click: whisper, invite and more", 0.5, 0.5, 0.5)
     GameTooltip:Show()
 end
 
+local CURRENT = " |cff40ff40(current)|r"
+
+-- Kun det, der giver mening for rækken: ingen whisper/invite til en selv, ingen invite til offline,
+-- og det nuværende valg af rolle er markeret. "Set as main" vises ikke på den, der allerede er main.
 local function OpenMenu(row)
     local e = row.entry
-    local items = {
-        { text = ns.Compat.ShortName(e.key), isTitle = true },
-        { text = "Whisper", func = function() ns.Compat.Whisper(e.key) end },
-        { text = "Invite", func = function() ns.Compat.Invite(e.key) end },
-    }
+    local isMe = e.key == ns.Compat.PlayerKey()
+    local items = { { text = ns.Compat.ShortName(e.key), isTitle = true } }
+    if not isMe then
+        table.insert(items, { text = "Whisper", func = function() ns.Compat.Whisper(e.key) end })
+        if e.online then
+            table.insert(items, { text = "Invite", func = function() ns.Compat.Invite(e.key) end })
+        end
+    end
     if e.hasAddon then
         table.insert(items, { text = "Show recipes", func = function() UI.ShowCrafter(e.key) end })
     end
-    if e.key == ns.Compat.PlayerKey() then
+    if isMe then
+        local override = ns.Data:GetMe().roleOverride
         for _, role in ipairs({ "TANK", "HEALER", "DPS" }) do
             table.insert(items, {
-                text = "Set role: " .. UI.ROLE_NAMES[role],
+                text = "Set role: " .. UI.ROLE_NAMES[role] .. (override == role and CURRENT or ""),
                 func = function() ns.Roles:SetOverride(role) end,
             })
         end
-        table.insert(items, { text = "Set role: Auto", func = function() ns.Roles:SetOverride(nil) end })
+        table.insert(items, { text = "Set role: Auto" .. (override == nil and CURRENT or ""),
+            func = function() ns.Roles:SetOverride(nil) end })
     end
-    if e.isMine then
+    if e.isMine and ns.Data:GetMyMain() ~= e.key then
         table.insert(items, {
             text = "Set as main",
             func = function() ns.Data:SetMyMain(e.key) end,
@@ -342,7 +372,7 @@ local function FilterLabel()
 end
 
 local function SetFilter(value)
-    state.filter = value
+    state.filter = value or false
     filterButton:SetText(FilterLabel())
     Roster.Refresh()
 end
@@ -377,14 +407,7 @@ local function OpenFilterMenu(button)
 end
 
 local function CreateHeader(content, col)
-    local button = CreateFrame("Button", nil, content)
-    button:SetSize(col.width, 18)
-    button:SetPoint("TOPLEFT", content, "TOPLEFT", col.x, -34)
-    local text = button:CreateFontString(nil, "ARTWORK", "GameFontNormalSmall")
-    text:SetPoint("LEFT", 0, 0)
-    text:SetText(col.label)
-    button:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
-    button:SetScript("OnClick", function()
+    local header = UI.CreateSortHeader(content, col.label, col.width, function()
         if state.sortKey == col.key then
             state.sortDesc = not state.sortDesc
         else
@@ -392,27 +415,23 @@ local function CreateHeader(content, col)
         end
         Roster.Refresh()
     end)
+    header:SetPoint("TOPLEFT", content, "TOPLEFT", col.x, -34)
+    headers[col.key] = header
 end
 
 local function Build(content)
-    local search = CreateFrame("EditBox", "GuildCraftersRosterSearch", content, "InputBoxTemplate")
-    search:SetSize(160, 20)
-    search:SetPoint("TOPLEFT", 8, -4)
-    search:SetAutoFocus(false)
-    search.hint = search:CreateFontString(nil, "ARTWORK", "GameFontDisableSmall")
-    search.hint:SetPoint("LEFT", 2, 0)
-    search.hint:SetText("Search name")
-    search:SetScript("OnTextChanged", function(self)
-        state.search = self:GetText()
-        self.hint:SetShown(state.search == "")
-        Roster.Refresh()
-    end)
-    search:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
-    search:SetScript("OnEnterPressed", function(self) self:ClearFocus() end)
+    state = UI.Saved("roster", { onlyOnline = false, filter = false, sortKey = "name", sortDesc = false })
+
+    -- Samme søgefelt som de andre faner (x og Esc rydder); søger også i class, rolle og professions.
+    local box = UI.CreateSearchBox(content, "GuildCraftersRosterSearch", 190, "Search name, class or profession",
+        function(text)
+            search = text
+            Roster.Refresh()
+        end)
 
     filterButton = CreateFrame("Button", nil, content, "UIPanelButtonTemplate")
     filterButton:SetSize(150, 22)
-    filterButton:SetPoint("LEFT", search, "RIGHT", 12, 0)
+    filterButton:SetPoint("LEFT", box, "RIGHT", 12, 0)
     filterButton:SetText(FilterLabel())
     filterButton:SetScript("OnClick", OpenFilterMenu)
 
@@ -422,6 +441,7 @@ local function Build(content)
     local onlineLabel = online:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
     onlineLabel:SetPoint("LEFT", online, "RIGHT", 2, 0)
     onlineLabel:SetText("Online only")
+    online:SetChecked(state.onlyOnline)
     online:SetScript("OnClick", function(self)
         state.onlyOnline = self:GetChecked() and true or false
         Roster.Refresh()
@@ -455,6 +475,9 @@ end
 function Roster.Refresh(content)
     if not scroll then return end
     BuildList()
+    for key, header in pairs(headers) do
+        if key == state.sortKey then header:SetSort(state.sortDesc) else header:SetSort(nil) end
+    end
     local online, withAddon = 0, 0
     for _, e in ipairs(list) do
         if e.online then online = online + 1 end

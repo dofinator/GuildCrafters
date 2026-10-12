@@ -68,6 +68,31 @@ local function OtherHolders(id)
     return keys
 end
 
+-- Hvem laver det? Ét navn er nok til overblikket: "You", ellers den første (online først), og "+N"
+-- for resten (alle står i tooltippen og i højreklik-menuen).
+local function CrafterText(keys)
+    if #keys == 0 then return "|cffff8080No crafter in the guild|r" end
+    local me = ns.Compat.PlayerKey()
+    local first = keys[1]
+    for _, key in ipairs(keys) do
+        if key == me then first = key end
+    end
+    local name = first == me and "|cff40ff40You|r" or UI.PersonText(first)
+    local text = "|cffaaaaaaCrafter:|r " .. name
+    if #keys > 1 then text = text .. string.format(" |cffaaaaaa+%d|r", #keys - 1) end
+    return text
+end
+
+-- En manglende mat, som ingen har, men som nogen kan crafte (fx Bolt of Linen Cloth til en vest):
+-- "Bob can craft it" i stedet for "Nobody in the guild".
+local function CanCraftText(keys)
+    local me = ns.Compat.PlayerKey()
+    for _, key in ipairs(keys) do
+        if key == me then return "|cff40ff40You|r can craft it" end
+    end
+    return UI.PersonText(keys[1]) .. " can craft it"
+end
+
 -- Én række pr. item efterfulgt af dets mats. "You have" fordeles ovenfra og ned, så to items,
 -- der bruger samme mat, ikke begge regner med de samme stk.
 local function BuildData()
@@ -84,6 +109,7 @@ local function BuildData()
             hyperlink = ns.Index.Hyperlink(e.kind, e.id),
             link = function() return ns.Index.Link(e.kind, e.id) end,
         }
+        item.crafter = CrafterText(item.keys)
         table.insert(data, item)
 
         local made, reagents = ns.Index:Reagents(e.kind, e.id)
@@ -102,12 +128,13 @@ local function BuildData()
                         missingCount = missingCount + 1
                     end
                 end
-                local matName = ns.Compat.ItemName(r.id) or ("item:" .. r.id)
+                local matName = ns.Compat.ItemName(r.id) or "Loading..."
                 table.insert(mats, {
                     id = r.id, name = matName, title = UI.ItemTitle(r.id, matName),
                     icon = ns.Compat.ItemIcon(r.id),
                     need = need, have = have, forName = name,
                     guild = GuildHasText(r.id), keys = OtherHolders(r.id),
+                    crafters = ns.Index:Crafters("i", r.id),
                     hyperlink = "item:" .. r.id,
                     link = function() return ns.Compat.ItemLink(r.id) end,
                 })
@@ -163,7 +190,9 @@ local function MaterialTooltip(item, row)
     local bank = ns.Index:GuildBankCount(item.id)
     if bank > 0 then GameTooltip:AddDoubleLine("  Guild bank", bank, 1, 0.82, 0, 1, 1, 1) end
     GameTooltip:AddLine(" ")
-    GameTooltip:AddLine("Right-click: ask someone who has it. Shift-click: link in chat", 0.5, 0.5, 0.5, true)
+    local craftable = item.have < item.need and #item.crafters > 0
+    GameTooltip:AddLine((craftable and "Right-click: add it to your craft list or ask for it."
+        or "Right-click: ask someone who has it.") .. " Shift-click: link in chat", 0.5, 0.5, 0.5, true)
     GameTooltip:Show()
 end
 
@@ -185,8 +214,22 @@ end
 local function OpenMenu(item, _, row)
     if item.entry then
         UI.WhisperMenu(row, item.name, item.keys, CraftMessage(item))
+        return
+    end
+    -- Mat: mangler man den, og kan nogen crafte den, kan den lægges på listen som sit eget punkt.
+    local missing = item.need - item.have
+    local extra
+    if missing > 0 and #item.crafters > 0 then
+        extra = { { text = string.format("Add %dx to craft list", missing), func = function()
+            ns.Data:CraftListAdd("i", item.id, missing)
+        end } }
+    end
+    if #item.keys == 0 and extra then
+        -- Ingen har den liggende: spørg en, der kan lave den.
+        UI.WhisperMenu(row, item.name, item.crafters,
+            string.format("Hi! Could you craft %dx %s for me?", missing, UI.ItemRef(item)), extra)
     else
-        UI.WhisperMenu(row, "Ask for " .. item.name, item.keys, AskMessage(item))
+        UI.WhisperMenu(row, "Ask for " .. item.name, item.keys, AskMessage(item), extra)
     end
 end
 
@@ -317,7 +360,8 @@ local function ShowItemRow(row, item)
     end
     row.need:SetText("")
     row.have:SetText("")
-    row.guild:SetText("")
+    row.guild:SetPoint("RIGHT", row.status, "LEFT", -8, 0)
+    row.guild:SetText(item.crafter)    -- samme kolonne som "Guild has" på mat-rækkerne
     for _, b in ipairs(row.buttons) do b:Show() end
 end
 
@@ -335,12 +379,15 @@ local function ShowMaterialRow(row, item)
     row.qty:SetText("")
     row.status:SetText("")
     row.need:SetText(item.need)
+    row.guild:SetPoint("RIGHT", row, "RIGHT", -6, 0)
     local enough = item.have >= item.need
     row.have:SetText((enough and "|cff40ff40" or "|cffff6060") .. item.have .. "|r")
     if item.guild then
         row.guild:SetText(item.guild)
     elseif enough then
         row.guild:SetText("|cffaaaaaa-|r")
+    elseif #item.crafters > 0 then
+        row.guild:SetText(CanCraftText(item.crafters))
     else
         row.guild:SetText("|cffff8080Nobody in the guild|r")
     end
@@ -460,7 +507,7 @@ local function Build(content)
 
     local legend = UI.CreateFooter(content)
     legend:SetText("|cff40ff40Green|r = you have enough. |cffff6060Red|r = missing: right-click it to ask who has it. "
-        .. "Hover an item to see who can craft it.")
+        .. "Right-click an item to whisper its crafter.")
 end
 
 UI:AddTab("Craft List", Build, Refresh)

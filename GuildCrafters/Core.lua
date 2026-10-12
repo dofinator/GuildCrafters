@@ -56,7 +56,13 @@ end)
 ns:RegisterEvent("PLAYER_LOGIN", function()
     ns.loggedIn = true
     ns:Fire("LOGIN")
-    ns:Print("v" .. ns.VERSION .. " loaded. Type /gc to open, /gc help for commands.")
+    -- Kun første gang og efter en opdatering; ved hvert login var linjen bare støj.
+    local seen = ns.db and ns.db.settings.seenVersion
+    if seen ~= ns.VERSION then
+        ns:Print("v" .. ns.VERSION .. (seen and " installed" or " loaded")
+            .. ". Type /gc to open, /gc help for commands.")
+        if ns.db then ns.db.settings.seenVersion = ns.VERSION end
+    end
 end)
 
 -- Slash-kommandoer: /gc <kommando> <resten>
@@ -70,6 +76,7 @@ end
 
 ns:RegisterCommand("help", function()
     ns:Print("Commands:")
+    ns:Print("  /gc <text> - search recipes, e.g. /gc flask (shift-click an item to paste its name)")
     for _, line in ipairs(helpLines) do
         ns:Print("  " .. line)
     end
@@ -85,6 +92,11 @@ SlashCmdList.GUILDCRAFTERS = function(msg)
     elseif commands[cmd] then
         commands[cmd](rest)
     else
-        commands.help()
+        -- Alt andet er en søgning i Crafting: "/gc flask". Et shift-klikket item ("/gc [Flask of the
+        -- Titans]") bliver til sit navn.
+        local text = msg:gsub("|H.-|h%[(.-)%]|h", "%1"):gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|cn.-:", "")
+            :gsub("|r", "")
+        text = text:gsub("^%s+", ""):gsub("%s+$", "")
+        ns.UI.SearchRecipes(text)
     end
 end
