@@ -10,6 +10,7 @@ move-folders:
 ignore:
   - tools
   - dist
+  - assets
   - README.md
   - SPEC.md
   - CLAUDE.md
