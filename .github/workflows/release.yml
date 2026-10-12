@@ -1,0 +1,79 @@
+name: Release
+
+# Push til main med en ny "## Version" i GuildCrafters/GuildCrafters.toc:
+#   simulator -> tag v<version> -> pak -> upload til CurseForge + GitHub Releases.
+# Push uden ny version gør ingenting.
+# "Run workflow" (manuelt) laver kun en prøvepakke uden at uploade; zip'en ligger som artifact på kørslen.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency: release
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # packageren bruger tags og historik til version og changelog
+
+      - name: Find version
+        id: version
+        run: |
+          version=$(sed -n 's/^## Version:[[:space:]]*//p' GuildCrafters/GuildCrafters.toc | tr -d '\r')
+          if [ -z "$version" ]; then
+            echo "Ingen ## Version i GuildCrafters.toc" >&2
+            exit 1
+          fi
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+          if [ "$GITHUB_EVENT_NAME" != "push" ]; then
+            echo "Manuel kørsel: prøvepakke af $version uden upload"
+          elif git rev-parse -q --verify "refs/tags/v$version" >/dev/null; then
+            echo "v$version er allerede udgivet - intet at gøre"
+          else
+            echo "Ny version: $version"
+            echo "release=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-python@v5
+        if: steps.version.outputs.release == 'true'
+        with:
+          python-version: "3.13"
+
+      - name: Simulator
+        if: steps.version.outputs.release == 'true'
+        run: |
+          pip install lupa
+          python tools/sim/sim.py
+
+      - name: Tag
+        if: steps.version.outputs.release == 'true'
+        run: |
+          git tag "${{ steps.version.outputs.tag }}"
+          git push origin "${{ steps.version.outputs.tag }}"
+
+      # Projekt-id'et læses fra "## X-Curse-Project-ID" i .toc'en. Uden CF_API_KEY springes CurseForge over.
+      - name: Pak og upload
+        if: steps.version.outputs.release == 'true'
+        uses: BigWigsMods/packager@v2
+        env:
+          CF_API_KEY: ${{ secrets.CF_API_KEY }}
+          GITHUB_OAUTH: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Prøvepakke (ingen upload)
+        if: github.event_name == 'workflow_dispatch'
+        uses: BigWigsMods/packager@v2
+        with:
+          args: -d
+
+      - uses: actions/upload-artifact@v4
+        if: github.event_name == 'workflow_dispatch'
+        with:
+          name: GuildCrafters-proevepakke
+          path: .release/*.zip

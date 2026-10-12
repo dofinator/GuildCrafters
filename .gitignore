@@ -1,0 +1,11 @@
+# Byggede pakker
+dist/
+.release/
+
+# Python
+__pycache__/
+*.pyc
+
+# Lokale noter (stier, kontonavn, karakternavne) – skal ikke ligge offentligt
+CLAUDE.md
+.claude/

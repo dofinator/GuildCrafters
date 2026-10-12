@@ -1,0 +1,15 @@
+# Opsætning til BigWigsMods/packager (se .github/workflows/release.yml).
+package-as: GuildCrafters
+
+# Addonen ligger i undermappen GuildCrafters/ – flyt den op i pakkens rod,
+# så zip'en bliver GuildCrafters/GuildCrafters.toc.
+move-folders:
+  GuildCrafters/GuildCrafters: GuildCrafters
+
+# Alt uden for addon-mappen skal ikke med i pakken.
+ignore:
+  - tools
+  - dist
+  - README.md
+  - SPEC.md
+  - CLAUDE.md

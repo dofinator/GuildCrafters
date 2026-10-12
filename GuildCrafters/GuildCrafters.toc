@@ -1,0 +1,33 @@
+## Interface: 20506, 11509, 120100, 16001
+## Title: GuildCrafters
+## Notes: Guild overview: who is who, and who can craft what.
+## Author: Christoffer
+## Version: 0.13.0
+## SavedVariables: GuildCraftersDB
+## IconTexture: Interface\Icons\Trade_BlackSmithing
+
+Libs\LibStub\LibStub.lua
+Libs\CallbackHandler-1.0\CallbackHandler-1.0.xml
+Libs\AceComm-3.0\AceComm-3.0.xml
+Libs\AceSerializer-3.0\AceSerializer-3.0.xml
+Libs\LibDataBroker-1.1\LibDataBroker-1.1.lua
+Libs\LibDBIcon-1.0\lib.xml
+
+Compat.lua
+Core.lua
+Data.lua
+Scanner.lua
+Roles.lua
+Comm.lua
+Sync.lua
+Mats.lua
+Index.lua
+Tooltip.lua
+UI\Frame.lua
+UI\List.lua
+UI\Roster.lua
+UI\Crafting.lua
+UI\CraftList.lua
+UI\Mats.lua
+UI\Launchers.lua
+Debug.lua
