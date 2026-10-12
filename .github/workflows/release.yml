@@ -77,3 +77,4 @@ jobs:
         with:
           name: GuildCrafters-proevepakke
           path: .release/*.zip
+          include-hidden-files: true # .release er en skjult mappe
