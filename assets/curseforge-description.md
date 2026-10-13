@@ -44,13 +44,11 @@ One Blizzard-style window for your guild: who is who, who has the mats, and who 
 - `/gc minimap`: show or hide the minimap button
 - `/gc help`: list all commands
 
-## Coming from GuildCrafts?
-
-GuildCrafts is a different addon with a similar name. Its page says it is no longer actively maintained by its original developer, and it does not list WoW Forever among its game versions. If your guild is looking for a replacement:
+## Switching from another guild profession addon?
 
 - GuildCrafters is deliberately small: a roster, recipes, a craft list and shared mats, in windows that look like Blizzard's own.
-- Nothing migrates. Everyone installs GuildCrafters and opens their profession windows once.
-- Both addons use `/gc`, so disable GuildCrafts first.
+- Nothing is imported. Everyone installs GuildCrafters and opens their profession windows once.
+- If your old addon also uses `/gc`, disable it first.
 
 ## Supported game versions
 

@@ -147,8 +147,8 @@ if ChatFrame_AddMessageEventFilter and ERR_CHAT_PLAYER_NOT_FOUND_S then
 end
 
 ------------------------------------------------------------------------
--- Pause i kamp (fra v0.15). Konkurrenternes brugere klager over lag fra sync i kamp og ved
--- raid-pulls, så i kamp gør vi kun det, der ikke kan vente: ser, om vores egne guild-beskeder kommer
+-- Pause i kamp (fra v0.15). Sync må aldrig kunne mærkes i en kamp eller ved et raid-pull, så i
+-- kamp gør vi kun det, der ikke kan vente: ser, om vores egne guild-beskeder kommer
 -- retur (ellers ville reserve-transporten slå til ved en fejl). Alt andet køes:
 --   ud:  beskeder, vi ville sende, sendes efter kampen med lidt tilfældig forsinkelse (hele raidet
 --        forlader kampen samtidig). Nyere beskeder af samme slags erstatter ældre.

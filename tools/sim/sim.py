@@ -1410,6 +1410,9 @@ def scenario_test_copy():
     check(head(test, "SavedVariables") == "## SavedVariables: GuildCraftersTestDB",
           f"Testudgaven gemmer i GuildCraftersTestDB ({head(test, 'SavedVariables')})")
     check(head(test, "X-Curse-Project-ID") is None, "Testudgaven har intet CurseForge-projekt-id")
+    # Release notes (CHANGELOG.md, se .pkgmeta) skal være skrevet til den version, der udgives.
+    notes = open(os.path.join(ROOT, "CHANGELOG.md"), encoding="utf-8").readline().strip()
+    check(notes == f"# GuildCrafters {toc_version()}", f"CHANGELOG.md starter med den aktuelle version ({notes})")
 
     # Testudgaven alene: kører som normalt, synkroniserer med den udgivne og gemmer i sin egen global.
     w = World()
