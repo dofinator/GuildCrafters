@@ -1,4 +1,4 @@
-## Interface: 20506, 11509, 120100, 16001
+## Interface: 20506, 11509, 16001
 ## Title: GuildCrafters |cffff8000[TEST]|r
 ## Notes: Development copy of GuildCrafters, loaded straight from the repository. Disable GuildCrafters while this one is enabled.
 ## Author: Christoffer
