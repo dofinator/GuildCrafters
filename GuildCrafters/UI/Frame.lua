@@ -13,6 +13,8 @@ local tabs = {}         -- { label, build = fn(content), refresh = fn(content), 
 local frame
 local currentTab
 local FitTabs
+local status
+local STATUS_WIDTH = 250       -- plads til statuslinjen til højre i fodlinjen (se CreateStatus)
 
 ------------------------------------------------------------------------
 -- Fælles hjælpere til fanerne
@@ -108,6 +110,7 @@ function UI:SelectTab(index)
     ns.db.settings.lastTab = index
     PanelTemplates_SetTab(frame, index)
     FitTabs()   -- valgt/ikke-valgt fane kan ændre tekstens bredde
+    UI.UpdateStatus()
     for i, tab in ipairs(tabs) do
         if i == index then
             if not tab.content then
@@ -149,6 +152,33 @@ FitTabs = function()
         local text = button:GetFontString()
         if text and text.IsTruncated and text:IsTruncated() then text:SetWidth(0) end
     end
+end
+
+-- Statuslinje (valgt af brugeren ud fra mockups, v0.15): til højre i fodlinjen på alle faner står én
+-- kort tekst, "Synced 2 min ago · 7 with addon", som kun skifter, når der sker noget ("Syncing...",
+-- "Sync paused (in combat)", ...). Resten står i tooltippen. Teksterne kommer fra Sync.lua.
+function UI.UpdateStatus()
+    if status and frame:IsShown() then status.text:SetText(ns.Sync:StatusText()) end
+end
+
+local function CreateStatus()
+    status = CreateFrame("Button", nil, frame)
+    status:SetSize(STATUS_WIDTH, 14)
+    status:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -20, 11)
+    status:SetFrameLevel(frame:GetFrameLevel() + 10)    -- over fanernes indhold, så musen rammer den
+    status.text = status:CreateFontString(nil, "ARTWORK", "GameFontDisableSmall")
+    status.text:SetAllPoints()
+    status.text:SetJustifyH("RIGHT")
+    status:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_TOPRIGHT")
+        for _, line in ipairs(ns.Sync:StatusLines()) do
+            GameTooltip:AddLine(line, 1, 1, 1)
+        end
+        GameTooltip:Show()
+    end)
+    status:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    -- "2 min ago" skal følge med tiden, også når intet andet opdaterer vinduet.
+    C_Timer.NewTicker(15, UI.UpdateStatus)
 end
 
 local function CreateMainFrame()
@@ -198,6 +228,7 @@ local function CreateMainFrame()
     end
     PanelTemplates_SetNumTabs(frame, #tabs)
     FitTabs()
+    CreateStatus()
 
     frame:Hide()
     UI:SelectTab(math.min(ns.db.settings.lastTab or 1, #tabs))
@@ -227,10 +258,29 @@ end
 
 function UI:CurrentTab() return currentTab end
 
+-- Hører en frame (fx ejeren af en tooltip) til addonens vindue?
+function UI.Owns(owner)
+    if not frame then return false end
+    for _ = 1, 20 do
+        if type(owner) ~= "table" then return false end
+        if owner == frame then return true end
+        owner = owner.GetParent and owner:GetParent()
+    end
+    return false
+end
+
 -- Opdatér den synlige fane, når data ændrer sig. Samler bursts af events til én opdatering.
+-- I kamp venter opdateringen, til kampen er slut: en opdatering af Crafting-fanen var det eneste i
+-- belastningstesten (600 medlemmer, 200 med addonen), der nåede over 200 ms. Det, man selv klikker
+-- på, opdaterer stadig med det samme.
 local refreshPending = false
+local refreshAfterCombat = false
 function UI:RequestRefresh()
     if not frame or not frame:IsShown() or refreshPending then return end
+    if ns.Compat.InCombat() then
+        refreshAfterCombat = true
+        return
+    end
     refreshPending = true
     C_Timer.After(0.3, function()
         refreshPending = false
@@ -238,6 +288,7 @@ function UI:RequestRefresh()
         if frame:IsShown() and tab and tab.refresh and tab.content then
             tab.refresh(tab.content)
         end
+        UI.UpdateStatus()
     end)
 end
 
@@ -245,13 +296,27 @@ ns:On("ROSTER_CHANGED", function() UI:RequestRefresh() end)
 ns:On("INDEX_CHANGED", function() UI:RequestRefresh() end)
 ns:On("ITEM_NAMES", function() UI:RequestRefresh() end)
 ns:On("CRAFTLIST_CHANGED", function() UI:RequestRefresh() end)
+local function RefreshAfterCombat()
+    if refreshAfterCombat and not ns.Compat.InCombat() then
+        refreshAfterCombat = false
+        UI:RequestRefresh()
+    end
+end
+-- SYNC_STATUS kommer også, når pausen slutter, uden at kamp-eventet er set (Comm tjekker selv).
+ns:On("SYNC_STATUS", function()
+    UI.UpdateStatus()
+    RefreshAfterCombat()
+end)
+ns:RegisterEvent("PLAYER_REGEN_ENABLED", RefreshAfterCombat)
 
--- Statuslinje nederst i en fane (antal, "Not in a guild" osv.).
+-- Fodlinje nederst i en fane (antal, "Not in a guild" osv.). Den højre del af linjen tilhører
+-- statuslinjen (CreateStatus), så teksten her må ikke brede sig derind.
 function UI.CreateFooter(content)
     local footer = content:CreateFontString(nil, "ARTWORK", "GameFontDisableSmall")
     footer:SetPoint("BOTTOMLEFT", 8, 2)
-    footer:SetPoint("BOTTOMRIGHT", -8, 2)
+    footer:SetPoint("BOTTOMRIGHT", -(STATUS_WIDTH + 16), 2)
     footer:SetJustifyH("LEFT")
+    if footer.SetWordWrap then footer:SetWordWrap(false) end
     return footer
 end
 

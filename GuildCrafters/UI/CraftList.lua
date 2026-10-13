@@ -68,16 +68,27 @@ local function OtherHolders(id)
     return keys
 end
 
--- Hvem laver det? Ét navn er nok til overblikket: "You", ellers den første (online først), og "+N"
--- for resten (alle står i tooltippen og i højreklik-menuen).
+-- Hvem laver det? Ét navn er nok til overblikket: "You", ellers en af ens egne alts, ellers den
+-- første (online først), og "+N" for resten (alle står i tooltippen og i højreklik-menuen).
+-- Kun det korte navn: "(alt of X)" gjorde rækken for lang i spillet.
 local function CrafterText(keys)
     if #keys == 0 then return "|cffff8080No crafter in the guild|r" end
     local me = ns.Compat.PlayerKey()
-    local first = keys[1]
+    local first, mine
     for _, key in ipairs(keys) do
-        if key == me then first = key end
+        if key == me then
+            first = key
+        elseif not mine and ns.Data:IsMine(key) then
+            mine = key
+        end
     end
-    local name = first == me and "|cff40ff40You|r" or UI.PersonText(first)
+    first = first or mine or keys[1]
+    local name
+    if first == me then
+        name = "|cff40ff40You|r"
+    else
+        name = (ns.Index:IsOnline(first) and "|cff40ff40" or "|cffaaaaaa") .. ns.Compat.ShortName(first) .. "|r"
+    end
     local text = "|cffaaaaaaCrafter:|r " .. name
     if #keys > 1 then text = text .. string.format(" |cffaaaaaa+%d|r", #keys - 1) end
     return text
@@ -506,8 +517,8 @@ local function Build(content)
     empty:SetText("Your craft list is empty.\nClick + next to a recipe in the Crafting tab to add it.")
 
     local legend = UI.CreateFooter(content)
-    legend:SetText("|cff40ff40Green|r = you have enough. |cffff6060Red|r = missing: right-click it to ask who has it. "
-        .. "Right-click an item to whisper its crafter.")
+    -- Kort nok til at dele linjen med statuslinjen til højre (UI.CreateFooter).
+    legend:SetText("|cff40ff40Green|r = you have enough. |cffff6060Red|r = missing. Right-click a row to ask for it.")
 end
 
 UI:AddTab("Craft List", Build, Refresh)

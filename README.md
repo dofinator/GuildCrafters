@@ -22,9 +22,11 @@ i guilden, så der er ingen server.
 | Craft List | Dine ønsker, hver med crafter og mats: hvad du skal bruge, hvad du selv har, og hvem i guilden der har resten. "Ready" når du har det hele |
 | Tooltip | Hold musen over et item: "Crafted by ..." og "Guild has: ..." |
 | `/gc mats on` | Del dine crafting-mats med guilden (fra som standard) |
+| `/gc tooltip on\|off` | Slå "Crafted by" og "Guild has" på item-tooltips til eller fra |
+| `/gc sync` | Bed guilden om nye data nu. Statuslinjen nederst til højre i vinduet viser, hvornår der sidst kom noget |
 | `/gc role tank\|healer\|dps\|auto` | Ret din rolle, hvis gættet er forkert |
 | `/gc main <navn>` | Vælg hvilken af dine chars, der er din main |
-| `/gc forget <profession>` | Fjern en profession, du har droppet |
+| `/gc forget <profession>` | Fjern en profession, du har droppet (sker også af sig selv efter 7 dage) |
 | `/gc help` | Alle kommandoer |
 
 Se [SPEC.md](SPEC.md) for design og protokol.
@@ -36,7 +38,9 @@ pip install lupa
 python tools/sim/sim.py
 ```
 
-Simulatoren kører addonen i flere falske WoW-klienter og tjekker sync, relay, mats, alts og UI.
+Simulatoren kører addonen i flere falske WoW-klienter og tjekker sync, relay, mats, alts og UI, også
+sammen med den udgivne 0.14 (hentes med git fra tagget `v0.14.0`, så tags skal være hentet).
+`python tools/sim/loadtest.py` måler én klient i en guild med 600 medlemmer.
 
 ### Testudgave i spillet
 

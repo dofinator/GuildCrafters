@@ -6,6 +6,9 @@ local Index = {}
 ns.Index = Index
 
 local dirty = true
+local built = false     -- er indekset bygget mindst én gang? (i kamp bruges det, selvom det er forældet)
+local sorted = {}       -- ["i123"] = crafters sorteret med online først; ryddes, når nogen af dem går on/off
+local onlineMemo = {}   -- [key] = online-status, som sorteringerne sidst så den
 local crafters = {}     -- ["i123"] / ["e456"] = { key, ... }
 local recipes = {}      -- { { kind = "i"|"e", id = 123 }, ... }
 local holders = {}      -- [itemID] = { { key, bags, bank, time }, ... }
@@ -25,8 +28,9 @@ end
 local function CollectPeople()
     wipe(people)
     local guild = ns.Data:GetGuild()
+    -- Chars, der har forladt guilden, skjules straks (og slettes senere, se Data:SweepGone).
     for key, rec in pairs(guild and guild.chars or {}) do
-        people[key] = { rec = rec }
+        if not ns.Sync:IsGone(key) then people[key] = { rec = rec } end
     end
     for key, rec in pairs(ns.Data:MyGuildChars()) do
         people[key] = { rec = rec, mine = true }
@@ -41,6 +45,8 @@ end
 
 local function Rebuild()
     wipe(crafters)
+    wipe(sorted)
+    wipe(onlineMemo)
     wipe(recipes)
     wipe(holders)
     wipe(guildBank)
@@ -84,10 +90,13 @@ local function Rebuild()
         end
     end
     dirty = false
+    built = true
 end
 
+-- En genopbygning koster ca. 40 ms med 200 addon-brugere (målt i tools/sim/loadtest.py). I kamp
+-- bruges det indeks, vi har, selvom det er forældet; det bygges igen ved første opslag efter kampen.
 local function Ensure()
-    if dirty then Rebuild() end
+    if dirty and not (built and ns.Compat.InCombat()) then Rebuild() end
 end
 
 function Index:MarkDirty()
@@ -120,15 +129,28 @@ function Index:DisplayName(key)
     return short
 end
 
+-- Online-status til sortering. Slås op én gang pr. person og huskes, til rosteren viser noget andet:
+-- sorteringen af crafters var det dyreste i belastningstesten (over 600.000 opslag pr. opdatering).
+local function Online(key)
+    local value = onlineMemo[key]
+    if value == nil then
+        value = Index:IsOnline(key) and true or false
+        onlineMemo[key] = value
+    end
+    return value
+end
+
+local function OnlineFirst(a, b)
+    local oa, ob = Online(a), Online(b)
+    if oa ~= ob then return oa end
+    return a < b
+end
+
 local function SortKeys(keys)
-    local sorted = {}
-    for _, key in ipairs(keys or {}) do table.insert(sorted, key) end
-    table.sort(sorted, function(a, b)
-        local oa, ob = Index:IsOnline(a), Index:IsOnline(b)
-        if oa ~= ob then return oa end
-        return a < b
-    end)
-    return sorted
+    local list = {}
+    for _, key in ipairs(keys or {}) do table.insert(list, key) end
+    table.sort(list, OnlineFirst)
+    return list
 end
 
 -- Alle med addonen, der kan crafte noget, online først og derefter efter navn: { { key, count }, ... }
@@ -140,11 +162,7 @@ function Index:CrafterList()
     end
     local list = {}
     for key, n in pairs(counts) do table.insert(list, { key = key, count = n }) end
-    table.sort(list, function(a, b)
-        local oa, ob = Index:IsOnline(a.key), Index:IsOnline(b.key)
-        if oa ~= ob then return oa end
-        return a.key < b.key
-    end)
+    table.sort(list, function(a, b) return OnlineFirst(a.key, b.key) end)
     return list
 end
 
@@ -152,10 +170,17 @@ end
 -- Recipes, crafters og reagents
 ------------------------------------------------------------------------
 
--- Crafters af et item ("i") eller enchant ("e"), online først.
+-- Crafters af et item ("i") eller enchant ("e"), online først. Listen genbruges, indtil rosteren
+-- eller data ændrer sig, så den må ikke ændres af den, der får den.
 function Index:Crafters(kind, id)
     Ensure()
-    return SortKeys(crafters[kind .. id])
+    local key = kind .. id
+    local list = sorted[key]
+    if not list then
+        list = SortKeys(crafters[key])
+        sorted[key] = list
+    end
+    return list
 end
 
 function Index:Recipes()
@@ -365,13 +390,11 @@ function Index:Find(filter)
             ok = top == filter.top and (not filter.sub or sub == filter.sub)
         end
         local keys
-        if ok then
+        if ok and filter.onlineOnly then
             keys = self:Crafters(r.kind, r.id)
-            if filter.onlineOnly then
-                ok = false
-                for _, key in ipairs(keys) do
-                    if self:IsOnline(key) and key ~= ns.Compat.PlayerKey() then ok = true end
-                end
+            ok = false
+            for _, key in ipairs(keys) do
+                if self:IsOnline(key) and key ~= ns.Compat.PlayerKey() then ok = true end
             end
         end
         if ok and #words > 0 then
@@ -389,7 +412,7 @@ function Index:Find(filter)
             local name = Index.Name(r.kind, r.id)
             if name then
                 table.insert(results, {
-                    kind = r.kind, id = r.id, name = name, keys = keys,
+                    kind = r.kind, id = r.id, name = name, keys = keys or self:Crafters(r.kind, r.id),
                     details = r.kind == "i" and ns.Compat.ItemDetails(r.id) or nil,
                 })
             else
@@ -412,7 +435,18 @@ end
 
 ns:On("DATA_CHANGED", Changed)
 ns:On("ME_CHANGED", Changed)
-ns:On("ROSTER_CHANGED", function() dirty = true end)
+-- Rosteren ændrer sig hele tiden i en stor guild (hvert login og logout), og før blev hele indekset
+-- bygget igen ved næste tooltip. Indekset afhænger ikke af, hvem der er online; kun rækkefølgen af
+-- crafters gør. Sync kalder MarkDirty, når nogen forlader guilden eller kommer tilbage.
+ns:On("ROSTER_CHANGED", function()
+    for key, was in pairs(onlineMemo) do
+        if (Index:IsOnline(key) and true or false) ~= was then
+            wipe(sorted)
+            wipe(onlineMemo)
+            return
+        end
+    end
+end)
 
 -- Item-navne kommer asynkront fra serveren; opdatér visningen, når de er klar.
 local namesPending = false

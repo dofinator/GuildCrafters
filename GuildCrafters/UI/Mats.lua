@@ -95,7 +95,7 @@ local function Refresh()
         })
     end
 
-    countText:SetText(string.format("%d mat%s · bags and bank are shared by those who turned on \"Share my mats\"",
+    countText:SetText(string.format("%d mat%s · from members with \"Share my mats\" on",
         #results, #results == 1 and "" or "s"))
     local emptyText
     if onlyCraftList and #ns.db.craftList == 0 then

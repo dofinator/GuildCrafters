@@ -16,14 +16,33 @@ local REQ_TIMEOUT = 30       -- sekunder før en ubesvaret REQ må sendes igen
 local MAX_REQ_TRIES = 4      -- så mange gange spørger vi igen, hvis svaret ikke når frem
 local HEARTBEAT = 600        -- sekunder mellem HELLO uden ændringer (retter tabte beskeder)
 local MAX_IDS = 2000         -- øvre grænse for lister i modtagne beskeder
+local SYNC_REPORT = 20       -- sekunder fra /gc sync, til resultatet står i chatten
 
 local lastSent = -MIN_INTERVAL
 local pending = false
 local pendingQuery = false
 local started = false
 local warnedVersion = false
+local busyUntil = 0          -- GetTime(): indtil da viser statuslinjen "Syncing..." (login, /gc sync)
+local manual                 -- { updates = antal } mens et /gc sync venter på svar
+
+local SWEEP_INTERVAL = 300   -- sekunder mellem oprydninger i cachen (Data:SweepGone)
+local SWEEP_DELAY = 60       -- første oprydning tidligst så længe efter login (rosteren skal falde til ro)
+local GUARD_MIN = 5          -- med mindst så mange kendte chars må højst halvdelen mangle i rosteren
+local HEARD_TTL = 900        -- så længe efter en HELLO regnes afsenderen for medlem, uanset rosteren
+                             -- (længere end hjerteslaget, så en, der er online med addonen, altid er med)
 
 local online = {}            -- [key] = true for online guildmedlemmer
+local members = {}           -- [key] = true for alle i guild-rosteren, som den sidst blev læst
+local rosterComplete = false -- viste rosteren hele guilden? Kun da siger "ikke i members" noget
+local hidden = {}            -- [key] = true: kendte chars, der lige nu regnes for at have forladt guilden
+local heard = {}             -- [key] = GetTime() for seneste HELLO: afsenderen er med i guilden
+local lastSweep, sweepFrom
+
+local function Heard(key)
+    local at = heard[key]
+    return at ~= nil and GetTime() - at < HEARD_TTL
+end
 local reqSeen = {}           -- [key|kind] = GetTime() for sendt/set REQ
 local wanted = {}            -- [key|kind] = { v = version vi mangler, tries = antal genforsøg }
 local dataPlanned = {}       -- [key|kind] = { v = version, cancelled = bool }
@@ -36,16 +55,74 @@ local function Rand(a, b) return a + math.random() * (b - a) end
 -- Online-status
 ------------------------------------------------------------------------
 
+-- Læser guild-rosteren: hvem er online, og hvem er overhovedet med. Kun når rosteren er komplet
+-- (indlæst, ens egen char er med, og alle navne kunne læses; se Compat.GetGuildMembers), må en char,
+-- der mangler, regnes for at have forladt guilden.
 local function RefreshOnline()
     wipe(online)
-    for _, m in ipairs(ns.Compat.GetGuildMembers()) do
+    wipe(members)
+    local list, complete = ns.Compat.GetGuildMembers()
+    for _, m in ipairs(list) do
+        members[m.key] = true
         if m.online then online[m.key] = true end
     end
-    online[ns.Compat.PlayerKey()] = true
+    local me = ns.Compat.PlayerKey()
+    rosterComplete = complete and members[me] == true
+    online[me], members[me] = true, true
+
+    -- Indekset (Index.lua) skjuler dem, der er gået: det skal kun bygges igen, når den gruppe ændrer sig.
+    local guild, guildKey = ns.Data:GetGuild()
+    local now, changed = {}, false
+    if rosterComplete and guild then
+        local known, missing = 0, 0
+        for key in pairs(guild.chars) do
+            known = known + 1
+            if not members[key] and not Heard(key) then
+                now[key] = true
+                missing = missing + 1
+            end
+        end
+        -- Sikring: mangler over halvdelen af dem, vi kender, på én gang, er det mere sandsynligt, at
+        -- rosteren er forkert (klienten viste kun nogle af medlemmerne), end at de alle er gået.
+        -- Sletning kan ikke fortrydes, så i det tilfælde konkluderes der intet.
+        if known >= GUARD_MIN and missing * 2 > known then
+            rosterComplete, now = false, {}
+        else
+            for key, rec in pairs(ns.db.myChars) do
+                if rec.guild == guildKey and not members[key] then now[key] = true end
+            end
+        end
+    end
+    for key in pairs(now) do
+        if not hidden[key] then changed = true end
+    end
+    for key in pairs(hidden) do
+        if not now[key] then changed = true end
+    end
+    hidden = now
+    if changed then ns.Index:MarkDirty() end
+    -- Oprydningen (mærker og sletning) kører med mellemrum, og straks når gruppen ændrer sig, så et
+    -- mærke sat ud fra en forkert roster er væk igen, så snart den rigtige kommer.
+    if rosterComplete and sweepFrom and GetTime() >= sweepFrom
+        and (changed or not lastSweep or GetTime() - lastSweep >= SWEEP_INTERVAL) then
+        lastSweep = GetTime()
+        ns.Data:SweepGone(function(key) return members[key] == true or Heard(key) end)
+    end
 end
 
 function Sync:IsOnline(key)
     return online[key] or false
+end
+
+-- Har char'en forladt guilden? Den står ikke i en komplet roster. Så skjules den (Index), og beskeder
+-- om den ignoreres; 0.14-klienter, der stadig har den i cachen, bliver ved med at annoncere den.
+-- Er rosteren ikke komplet, er svaret altid nej.
+function Sync:IsGone(key)
+    return rosterComplete and not members[key] and not Heard(key)
+end
+
+function Sync:RosterComplete()
+    return rosterComplete
 end
 
 ------------------------------------------------------------------------
@@ -173,19 +250,23 @@ local function Id(key, kind) return key .. "|" .. kind end
 -- Serveren kan tabe addon-beskeder uden fejl (set i spillet), og en andens REQ kan få os til at vente
 -- på et svar, der aldrig når os. Derfor husker vi, hvilken version vi mangler, og spørger igen efter
 -- REQ_TIMEOUT, indtil den er kommet (højst MAX_REQ_TRIES gange; næste HELLO starter forfra).
-local function WatchWanted(key, kind)
+local function WatchWanted(key, kind, w)
     local id = Id(key, kind)
     C_Timer.After(REQ_TIMEOUT + Rand(1, 6), function()
-        local w = wanted[id]
-        if not w then return end
+        if wanted[id] ~= w then return end      -- data er kommet (og måske et nyt ønske siden)
+        if ns.Comm.paused then                  -- i kamp sendes intet: forsøgene skal ikke bruges op
+            WatchWanted(key, kind, w)
+            return
+        end
         if ns.Data:HeldVersion(key, kind) >= w.v or w.tries >= MAX_REQ_TRIES then
             wanted[id] = nil
+            ns:Fire("SYNC_STATUS")
             return
         end
         w.tries = w.tries + 1
         reqSeen[id] = nil
         Sync:QueueReq(key, kind)
-        WatchWanted(key, kind)
+        WatchWanted(key, kind, w)
     end)
 end
 
@@ -193,12 +274,16 @@ end
 -- want: den version, vi ved findes (fra HELLO/INVR).
 function Sync:QueueReq(key, kind, want)
     local id = Id(key, kind)
+    if Sync:IsGone(key) then
+        wanted[id] = nil
+        return
+    end
     if want then
         local w = wanted[id]
         if not w then
             w = { v = want, tries = 0 }
             wanted[id] = w
-            WatchWanted(key, kind)
+            WatchWanted(key, kind, w)
         elseif want > w.v then
             w.v, w.tries = want, 0
         end
@@ -232,6 +317,7 @@ end
 ns.Comm:Handle("REQ", function(sender, msg)
     local key, kind = msg.c, msg.k
     if not ValidKey(key) or not VALIDATORS[kind] or type(msg.h) ~= "number" then return end
+    if Sync:IsGone(key) then return end
 
     -- En andens REQ dækker også os, fordi svaret kommer på guild-kanalen. Det gælder ikke, når ejeren
     -- kun kan svare med whisper (blokeret guild-kanal): så må hver især spørge selv.
@@ -257,6 +343,7 @@ end)
 ns.Comm:Handle("DATA", function(sender, msg)
     local key, kind, version = msg.c, msg.k, msg.v
     if not ValidKey(key) or type(version) ~= "number" or not Valid(kind, msg.d) then return end
+    if Sync:IsGone(key) then return end
 
     local id = Id(key, kind)
     reqSeen[id] = nil
@@ -265,6 +352,12 @@ ns.Comm:Handle("DATA", function(sender, msg)
 
     if version > ns.Data:HeldVersion(key, kind) then
         ns.Data:ApplyPayload(key, kind, version, msg.d)
+        if manual then manual.updates = manual.updates + 1 end
+    end
+    local w = wanted[id]
+    if w and ns.Data:HeldVersion(key, kind) >= w.v then
+        wanted[id] = nil
+        ns:Fire("SYNC_STATUS")
     end
 end)
 
@@ -276,7 +369,7 @@ local function BuildInventory(exclude)
     local list = {}
     local guild = ns.Data:GetGuild()
     local function Add(key)
-        if key == exclude or Sync:IsOnline(key) then return end
+        if key == exclude or Sync:IsOnline(key) or Sync:IsGone(key) then return end
         local entry, any = {}, false
         for i, kind in ipairs(KINDS) do
             entry[i] = ns.Data:HeldVersion(key, kind)
@@ -330,7 +423,7 @@ ns.Comm:Handle("INVR", function(sender, msg)
 
     for key, entry in pairs(msg.l) do
         if ValidKey(key) and type(entry) == "table"
-            and not ns.Data:IsMine(key) and not Sync:IsOnline(key) then
+            and not ns.Data:IsMine(key) and not Sync:IsOnline(key) and not Sync:IsGone(key) then
             for i, kind in ipairs(KINDS) do
                 local v = entry[i]
                 if type(v) == "number" and v > ns.Data:HeldVersion(key, kind) then
@@ -367,7 +460,7 @@ ns.Comm:Handle("GBANK", function(sender, msg)
         if type(tab) ~= "number" or not IsCountMap(counts) then return end
     end
     if gbankPlanned and msg.s >= ns.Data:GuildBankTime() then gbankPlanned.cancelled = true end
-    ns.Data:ApplyGuildBank(msg.s, msg.d)
+    if ns.Data:ApplyGuildBank(msg.s, msg.d) and manual then manual.updates = manual.updates + 1 end
 end)
 
 ------------------------------------------------------------------------
@@ -385,8 +478,9 @@ local function CheckVersion(sender, av)
     local theirs, ours = ParseVersion(av), ParseVersion(ns.VERSION)
     if theirs and ours and theirs > ours then
         warnedVersion = true
+        -- av kommer fra en anden spiller: "|" i den må ikke blive til styrekoder i chatten.
         ns:Print(string.format("%s has a newer version (%s). You have %s.",
-            ns.Compat.ShortName(sender), av, ns.VERSION))
+            ns.Compat.ShortName(sender), ns.Plain(tostring(av)), ns.VERSION))
     end
 end
 
@@ -395,10 +489,34 @@ ns.Comm:Handle("HELLO", function(sender, msg)
     if ns.Data:IsMine(sender) then return end
     if not Valid("info", msg) or type(msg.v) ~= "table" then return end
 
+    -- En, der sender til guilden, er med i den, også hvis rosteren ikke viser det (et nyt medlem,
+    -- før klientens kopi af rosteren er opdateret). Det gælder i HEARD_TTL sekunder.
+    local wasHeard = Heard(sender)
+    heard[sender] = GetTime()
+    if not wasHeard then
+        if hidden[sender] then
+            hidden[sender] = nil
+            ns.Index:MarkDirty()
+        end
+        if rosterComplete and not members[sender] then ns.Compat.RequestGuildRoster() end
+    end
+    local wasOnline = online[sender]
     online[sender] = true
-    ns.Data:ApplyPayload(sender, "info", tonumber(msg.v.info) or 0, msg)
+
+    -- Et hjerteslag uden ændringer (samme version, addon-version og main) skal ikke koste noget:
+    -- før blev info gemmet igen hver gang, og indekset og det åbne vindue blev bygget forfra.
+    local version = tonumber(msg.v.info) or 0
     local c = ns.Data:GetChar(sender)
-    if c then c.seen = time() end
+    if not c or version ~= ns.Data:HeldVersion(sender, "info") or c.addonVer ~= msg.av or c.main ~= msg.main then
+        if manual and version > ns.Data:HeldVersion(sender, "info") then
+            manual.updates = manual.updates + 1
+        end
+        ns.Data:ApplyPayload(sender, "info", version, msg)
+        c = ns.Data:GetChar(sender)
+    elseif not wasOnline then
+        ns:Fire("ROSTER_CHANGED")
+    end
+    if c then c.seen, c.gone = time(), nil end
     CheckVersion(sender, msg.av)
 
     for _, kind in ipairs({ "recipes", "mats" }) do
@@ -430,7 +548,11 @@ local function TryStart()
     if started or not ns.loggedIn or not guildKey then return end
     started = true
     ns.Data:GetMe().guild = guildKey
+    ns.Index:MarkDirty()        -- ens egen char hører nu til guilden
+    sweepFrom = GetTime() + SWEEP_DELAY
+    C_Timer.After(SWEEP_DELAY + 1, RefreshOnline)
     RefreshOnline()
+    busyUntil = GetTime() + 30
     Sync:QueueHello(Rand(5, 15), true)
 end
 
@@ -443,6 +565,7 @@ end)
 
 ns:RegisterEvent("PLAYER_GUILD_UPDATE", function()
     TryStart()
+    ns.Index:MarkDirty()        -- en anden guild (eller ingen) er andre folk
     ns:Fire("ROSTER_CHANGED")
 end)
 
@@ -480,3 +603,90 @@ end)
 ns:On("GUILD_SEND_LOST", function()
     if started then Sync:QueueHello(2, true) end
 end)
+
+------------------------------------------------------------------------
+-- Manuel sync og statuslinje (valgt af brugeren ud fra mockups, v0.15)
+------------------------------------------------------------------------
+
+-- Hvornår hørte vi sidst fra en anden med addonen? Gemmes pr. guild, så linjen også siger noget lige
+-- efter login ("Synced 3 hours ago").
+ns:On("HEARD", function(key)
+    local guild = ns.Data:GetGuild()
+    if guild then guild.heard, guild.heardFrom = time(), key end
+end)
+
+-- Online guild-medlemmer med addonen (ikke en selv og ens alts), og hvor mange vi kender i alt.
+function Sync:AddonUsers()
+    local guild = ns.Data:GetGuild()
+    local onlineCount, known = 0, 0
+    for key in pairs(guild and guild.chars or {}) do
+        if not Sync:IsGone(key) then
+            known = known + 1
+            if online[key] then onlineCount = onlineCount + 1 end
+        end
+    end
+    return onlineCount, known
+end
+
+function Sync:IsBusy()
+    return GetTime() < busyUntil or next(wanted) ~= nil
+end
+
+-- Den korte tekst til højre i vinduets fodlinje.
+function Sync:StatusText()
+    local guild = ns.Data:GetGuild()
+    if not guild then return "" end
+    if ns.Comm.paused then return "Sync paused (in combat)" end
+    if ns.Comm.guildBlocked then return "Sending directly (guild channel blocked)" end
+    if Sync:IsBusy() then return "Syncing..." end
+    local n = Sync:AddonUsers()
+    if n == 0 then return "Nobody else online with the addon" end
+    return string.format("%s · %d with addon",
+        guild.heard and ("Synced " .. ns.UI.Ago(guild.heard)) or "Not synced yet", n)
+end
+
+-- Tooltippen på statuslinjen.
+function Sync:StatusLines()
+    local guild = ns.Data:GetGuild()
+    if not guild then return { "Not in a guild" } end
+    local n, known = Sync:AddonUsers()
+    local lines = {}
+    if guild.heard then
+        table.insert(lines, string.format("Last update: %s (from %s)", ns.UI.Ago(guild.heard),
+            ns.Compat.ShortName(guild.heardFrom or "?")))
+    else
+        table.insert(lines, "No updates received yet")
+    end
+    table.insert(lines, string.format("%d online with GuildCrafters, %d known", n, known))
+    table.insert(lines, "Type /gc sync to ask the guild now")
+    return lines
+end
+
+-- /gc sync: bed guilden om nye data nu (HELLO med q), i stedet for at vente på næste hjerteslag.
+ns:RegisterCommand("sync", function()
+    if not started then
+        ns:Print("You are not in a guild.")
+        return
+    end
+    if ns.Comm.paused then
+        ns:Print("You are in combat. Sync continues when the fight is over.")
+        return
+    end
+    local wait = math.ceil(lastSent + MIN_INTERVAL - GetTime())
+    if manual or pending or wait > 0 then
+        ns:Print(string.format("Just asked. Try again in %d sec.", math.max(wait, manual and 5 or 1)))
+        return
+    end
+    ns:Print("Asking the guild for updates...")
+    manual = { updates = 0 }
+    busyUntil = GetTime() + SYNC_REPORT
+    Sync:SendHello(true)
+    ns:Fire("SYNC_STATUS")
+    C_Timer.After(SYNC_REPORT, function()
+        local updates = manual.updates
+        manual = nil
+        ns:Print(string.format("Sync done: %d online with the addon, %d update%s.",
+            (Sync:AddonUsers()), updates, updates == 1 and "" or "s"))
+        ns:Fire("SYNC_STATUS")
+    end)
+end, "/gc sync - ask the guild for fresh data now")

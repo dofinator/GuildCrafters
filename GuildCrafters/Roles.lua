@@ -89,7 +89,7 @@ ns:RegisterCommand("role", function(arg)
     elseif Roles.VALID[arg] then
         Roles:SetOverride(arg)
     else
-        ns:Print("Usage: /gc role tank|healer|dps|auto")
+        ns:Print(ns.Plain("Usage: /gc role tank|healer|dps|auto"))
         return
     end
     local me = ns.Data:GetMe()

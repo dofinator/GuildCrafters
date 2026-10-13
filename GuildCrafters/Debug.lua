@@ -426,6 +426,7 @@ ns:RegisterCommand("debug", function(rest)
                 tostring(IsInGuild()), tostring((ns.Compat.GuildKey())),
                 tostring(C_ChatInfo.IsAddonMessagePrefixRegistered
                     and C_ChatInfo.IsAddonMessagePrefixRegistered(ns.Comm.PREFIX))))
+            ns:Print("Lockdown: " .. ns.Compat.LockdownInfo() .. ", sync paused=" .. tostring(ns.Comm.paused))
         end)
     elseif sub == "hello" then
         ns.debugComm = true
@@ -442,6 +443,6 @@ ns:RegisterCommand("debug", function(rest)
             StartTour()
         end
     else
-        ns:Print("Usage: /gc debug dump [profession] | fake [count] | clear | comm | hello | ping | tour [stop]")
+        ns:Print(ns.Plain("Usage: /gc debug dump [profession] | fake [count] | clear | comm | hello | ping | tour [stop]"))
     end
 end, "/gc debug dump|fake N|clear|comm|hello|ping|tour - test tools")

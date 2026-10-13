@@ -146,8 +146,131 @@ if ChatFrame_AddMessageEventFilter and ERR_CHAT_PLAYER_NOT_FOUND_S then
     end)
 end
 
+------------------------------------------------------------------------
+-- Pause i kamp (fra v0.15). Sync må aldrig kunne mærkes i en kamp eller ved et raid-pull, så i
+-- kamp gør vi kun det, der ikke kan vente: ser, om vores egne guild-beskeder kommer
+-- retur (ellers ville reserve-transporten slå til ved en fejl). Alt andet køes:
+--   ud:  beskeder, vi ville sende, sendes efter kampen med lidt tilfældig forsinkelse (hele raidet
+--        forlader kampen samtidig). Nyere beskeder af samme slags erstatter ældre.
+--   ind: andres beskeder gemmes som rå tekst og behandles bagefter, nogle få ad gangen. REQ må ikke
+--        gå tabt (den, der spørger, giver op efter et par minutter), så de ryddes aldrig ud.
+-- Der pauses i kamp (InCombatLockdown), ikke i hele instances. Klientens lockdown-funktioner på
+-- Mainline styrer ikke pausen; se Compat.InCombat for hvorfor.
+------------------------------------------------------------------------
+
+local MAX_IN_BYTES = 1000000    -- loft over gemte indgående beskeder; de ældste, der ikke er REQ, ryger først
+local DRAIN_STEP = 0.1          -- sekunder mellem to gemte beskeder efter kampen (en stor DATA koster
+                                -- 2-8 ms at pakke ud, målt i tools/sim/loadtest.py)
+local RESUME_CHECK = 3          -- sekunder mellem tjek af, om kampen er slut (reserve for eventet)
+
+Comm.paused = false
+local outQueue, outByKey = {}, {}   -- { key, msg, distribution, target, prio }
+local inQueue, inBytes = {}, 0      -- { text, distribution, sender, req = bool }
+local draining = false
+local SendNow, Receive
+
+local function Pause()
+    if Comm.paused then return end
+    Comm.paused = true
+    ns:Fire("SYNC_STATUS")
+    -- PLAYER_REGEN_ENABLED afslutter normalt pausen; tjekket her dækker en lockdown uden det event.
+    local function Check()
+        if not Comm.paused then return end
+        if ns.Compat.InCombat() then
+            C_Timer.After(RESUME_CHECK, Check)
+        else
+            Comm.Resume()
+        end
+    end
+    C_Timer.After(RESUME_CHECK, Check)
+end
+
+local function IsPaused()
+    if not Comm.paused and ns.Compat.InCombat() then Pause() end
+    return Comm.paused
+end
+
+-- Én gemt besked ad gangen. Næste trin planlægges, før beskeden behandles, og en fejl i en besked må
+-- ikke stoppe resten: ellers blev alt, der blev gemt i denne og senere kampe, aldrig behandlet.
+local function Drain()
+    local entry = not Comm.paused and table.remove(inQueue, 1)
+    if not entry then
+        draining = false
+        return
+    end
+    inBytes = inBytes - #entry.text
+    C_Timer.After(DRAIN_STEP, Drain)
+    xpcall(Receive, geterrorhandler(), entry.text, entry.distribution, entry.sender)
+end
+
+function Comm.Resume()
+    if not Comm.paused or ns.Compat.InCombat() then return end
+    Comm.paused = false
+    ns:Fire("SYNC_STATUS")
+    if #inQueue > 0 and not draining then
+        draining = true
+        C_Timer.After(DRAIN_STEP, Drain)
+    end
+    if #outQueue > 0 then
+        C_Timer.After(1 + math.random() * 3, function()
+            if IsPaused() then return end       -- i kamp igen: køen bliver stående
+            local queue = outQueue
+            outQueue, outByKey = {}, {}
+            for _, e in ipairs(queue) do
+                SendNow(e.msg, e.distribution, e.target, e.prio)
+            end
+        end)
+    end
+end
+
+ns:RegisterEvent("PLAYER_REGEN_DISABLED", Pause)
+ns:RegisterEvent("PLAYER_REGEN_ENABLED", function() Comm.Resume() end)
+
+local function QueueOut(msg, distribution, target, prio)
+    local key = table.concat({ msg.t, msg.c or "", msg.k or "", distribution, target or "" }, "|")
+    local entry = outByKey[key]
+    if entry then
+        if entry.msg.q then msg.q = entry.msg.q end     -- et "svar venligst" må ikke gå tabt
+        entry.msg, entry.prio = msg, prio
+    else
+        entry = { msg = msg, distribution = distribution, target = target, prio = prio }
+        outByKey[key] = entry
+        table.insert(outQueue, entry)
+    end
+end
+
+local function QueueIn(text, distribution, sender)
+    -- Samme besked igen (den, der spørger, prøver igen hvert halve minut): én er nok.
+    for _, e in ipairs(inQueue) do
+        if e.sender == sender and e.text == text then return end
+    end
+    table.insert(inQueue, { text = text, distribution = distribution, sender = sender,
+        req = text:find("^SREQ^", 1, true) ~= nil })
+    inBytes = inBytes + #text
+    local i = 1
+    while inBytes > MAX_IN_BYTES and i <= #inQueue do
+        if inQueue[i].req then
+            i = i + 1
+        else
+            inBytes = inBytes - #inQueue[i].text
+            table.remove(inQueue, i)
+        end
+    end
+end
+
 -- prio: "ALERT", "NORMAL" eller "BULK" (ChatThrottleLib).
 function Comm:Send(msg, distribution, target, prio)
+    -- Også lige efter kampen, mens køen venter på at blive sendt: ellers gik en ny HELLO ud før den
+    -- gamle i køen, og den gamle (forældet rolle, level, professions) vandt hos alle modtagere.
+    if IsPaused() or #outQueue > 0 then
+        QueueOut(msg, distribution, target, prio)
+        return
+    end
+    SendNow(msg, distribution, target, prio)
+end
+
+SendNow = function(msg, distribution, target, prio)
+    local self = Comm
     msg.p = Comm.PROTO
     local text = AceSerializer:Serialize(msg)
     Log("->", msg.t, target or distribution, #text)
@@ -182,6 +305,26 @@ end
 function Comm:OnCommReceived(prefix, text, distribution, sender)
     if IsSecret(prefix, text, sender) then return end
     if prefix ~= Comm.PREFIX then return end
+    -- Også mens køen tømmes efter kampen: nye beskeder skal bagest i køen, ellers blev en ældre
+    -- besked fra samme afsender behandlet efter den nye og vandt.
+    if IsPaused() or draining or #inQueue > 0 then
+        -- Afsenderen tjekkes, før noget pakkes ud: vores eget ekko må ikke vente (se WatchEcho),
+        -- og resten skal ikke koste noget i kamp.
+        if ns.Compat.FullName(sender) == ns.Compat.PlayerKey() then
+            if distribution == "GUILD" then GuildEchoSeen() end
+        else
+            QueueIn(text, distribution, sender)
+            if not Comm.paused and not draining then
+                draining = true
+                C_Timer.After(DRAIN_STEP, Drain)
+            end
+        end
+        return
+    end
+    Receive(text, distribution, sender)
+end
+
+Receive = function(text, distribution, sender)
     local ok, msg = AceSerializer:Deserialize(text)
     if not ok or type(msg) ~= "table" or type(msg.t) ~= "string" or type(msg.p) ~= "number" then
         DebugPrint("invalid message from " .. tostring(sender))
@@ -204,6 +347,7 @@ function Comm:OnCommReceived(prefix, text, distribution, sender)
             peers[key] = true
             if Comm.guildBlocked then ns:Fire("PEER_FOUND", key) end
         end
+        ns:Fire("HEARD", key)
         -- Sender de via whisper, ser vi ikke deres svar til andre; se REQ i Sync.lua.
         Comm.viaWhisper[key] = distribution == "WHISPER"
     end

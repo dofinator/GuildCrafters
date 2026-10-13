@@ -8,10 +8,16 @@ mod en falsk WoW-API (wowmock.lua) og et fælles falsk netværk med forsinkelse.
     python tools/sim/sim.py            # kør alle scenarier
     python tools/sim/sim.py -v         # vis også chat-output fra klienterne
 """
+import atexit
+import io
 import os
 import random
 import re
+import shutil
+import subprocess
 import sys
+import tarfile
+import tempfile
 
 from lupa import lua51
 
@@ -42,16 +48,46 @@ SPELL_TEXT = {7418: "Permanently enchant bracers to increase health by 5.",
               13646: "Permanently enchant bracers to increase defense by 1."}
 
 
-def toc_files(addon="GuildCrafters"):
+_sources = {}
+
+
+def addon_source(ref=None):
+    """Mappen med addon-kilden: arbejdskopien, eller en udgivet version hentet med git (fx "v0.14.0"),
+    så en ældre klient kan køre i samme guild som den nye."""
+    if not ref:
+        return ADDON
+    if ref not in _sources:
+        def git(*args):
+            return subprocess.run(["git", "-C", ROOT, *args], capture_output=True)
+        if git("rev-parse", "-q", "--verify", ref + "^{commit}").returncode != 0:
+            git("fetch", "--depth", "1", "origin", "tag", ref)      # CI henter ikke altid tags
+        archive = git("archive", "--format=tar", ref, "GuildCrafters")
+        if archive.returncode != 0:
+            raise RuntimeError(f"Kan ikke hente {ref} med git: {archive.stderr.decode(errors='replace')}")
+        tmp = tempfile.mkdtemp(prefix="gcsim-")
+        atexit.register(shutil.rmtree, tmp, True)
+        tar = tarfile.open(fileobj=io.BytesIO(archive.stdout))
+        try:
+            tar.extractall(tmp, filter="data")
+        except TypeError:           # ældre Python uden filter-argumentet
+            tar.extractall(tmp)
+        _sources[ref] = os.path.join(tmp, "GuildCrafters")
+    return _sources[ref]
+
+
+OLD = "v0.14.0"     # den udgivne version, som vennerne kører, mens 0.15 testes
+
+
+def toc_files(addon="GuildCrafters", root=ADDON):
     files = []
-    for line in open(os.path.join(ADDON, addon + ".toc"), encoding="utf-8"):
+    for line in open(os.path.join(root, addon + ".toc"), encoding="utf-8"):
         line = line.strip()
         if not line or line.startswith("#"):
             continue
         path = line.replace("\\", "/")
         if path.endswith(".xml"):
             base = os.path.dirname(path)
-            xml = open(os.path.join(ADDON, path), encoding="utf-8").read()
+            xml = open(os.path.join(root, path), encoding="utf-8").read()
             for f in re.findall(r'<(?:Script|Include) file="([^"]+)"', xml):
                 files.append(os.path.join(base, f.replace("\\", "/")))
         else:
@@ -59,8 +95,8 @@ def toc_files(addon="GuildCrafters"):
     return files
 
 
-def toc_version():
-    for line in open(os.path.join(ADDON, "GuildCrafters.toc"), encoding="utf-8"):
+def toc_version(base=ADDON):
+    for line in open(os.path.join(base, "GuildCrafters.toc"), encoding="utf-8"):
         if line.startswith("## Version:"):
             return line.split(":", 1)[1].strip()
 
@@ -68,6 +104,7 @@ def toc_version():
 class World:
     def __init__(self):
         self.now = 0.0
+        self.epoch = 0       # sekunder lagt til time(): et spring i kalenderen, mens alle er logget af
         self.clients = []
         self.queue = []      # (deliver_at, client, prefix, text, channel, sender)
         self.sent = []       # log af alle beskeder: (tid, afsender, type-hint, bytes)
@@ -123,8 +160,14 @@ class World:
 class Client:
     def __init__(self, world, name, cls, level, guild=GUILD, profs=None, talents=(0, 0, 0),
                  bags=None, saved=None, flavor="classic", spec_role=None, addon="GuildCrafters",
-                 also_loaded=()):
+                 also_loaded=(), source=None, locale="enUS"):
         self.world = world
+        self.source = source            # None = arbejdskopien, ellers et git-tag som "v0.14.0"
+        self.base = addon_source(source)
+        # Hvad guild-rosteren viser: "full", "empty" (ikke indlæst endnu), "online" (kun online-rækker,
+        # men det samlede antal er rigtigt) eller "online_total" (også antallet tæller kun online).
+        self.roster_mode = "full"
+        self.roster_skip = set()        # navne, klientens kopi af rosteren (endnu) ikke har med
         self.flavor = flavor            # "classic" (TBC Anniversary) eller "mainline" (retail / WoW Forever)
         self.addon = addon              # mappenavnet: "GuildCrafters" eller testudgaven "GuildCraftersTest"
         self.name = name
@@ -136,9 +179,11 @@ class Client:
         self.L = L
         g = L.globals()
         g.sim_py_now = lambda: world.now
+        g.sim_py_epoch = lambda: world.epoch
+        g.sim_locale = locale
         g.sim_py_send = lambda p, t, ch, tg: world.send(self, p, t, ch, tg)
         g.sim_py_print = self._print
-        g.sim_version = toc_version()
+        g.sim_version = toc_version(self.base)
         g.sim_flavor = flavor
         g.sim_addon = addon
         g.sim_loaded = L.table_from({name: True for name in also_loaded})
@@ -175,8 +220,8 @@ class Client:
             g.sim_spells[sid] = sname
 
         self.ns = L.table()
-        for f in toc_files(addon):
-            code = open(os.path.join(ADDON, f), encoding="utf-8").read()
+        for f in toc_files(addon, self.base):
+            code = open(os.path.join(self.base, f), encoding="utf-8").read()
             g.sim_load_file(f, code, self.ns)
         if saved:
             g.sim_load_sv(saved)
@@ -201,8 +246,22 @@ class Client:
             for name, level, cls, online in self.world.ghosts:
                 rows.append(L.table_from({"name": f"{name}-{REALM}", "level": level, "class": cls,
                                           "online": online}))
+        rows = [r for r in rows if r.name.split("-")[0] not in self.roster_skip]
+        total = len(rows)
+        if self.roster_mode == "empty":
+            rows, total = [], 0
+        elif self.roster_mode in ("online", "online_total"):
+            rows = [r for r in rows if r.online]
+            if self.roster_mode == "online_total":
+                total = len(rows)
         self.g.sim_roster = L.table_from(rows)
+        self.g.sim_rosterTotal = total
+        self.g.sim_showOffline = self.roster_mode not in ("online", "online_total")
         self.g.sim_fire("GUILD_ROSTER_UPDATE")
+
+    def combat(self, on):
+        self.g.sim_inCombat = on
+        self.g.sim_fire("PLAYER_REGEN_DISABLED" if on else "PLAYER_REGEN_ENABLED")
 
     def login(self):
         self.online = True
@@ -256,6 +315,7 @@ class Client:
 
     def tooltip(self, item_id):
         tt = self.g.GameTooltip
+        tt.SetOwner(tt, self.g.UIParent)        # et item et sted i spillet, ikke i addonens vindue
         tt.SetHyperlink(tt, f"item:{item_id}")
         return [l for _, l in tt.sim_lines.items()]
 
@@ -385,7 +445,6 @@ def scenario_alts():
     anna.open_trade("Alchemy")
     w.step(30)
     saved = anna.logout()
-    w.clients.remove(anna)
 
     annalt = Client(w, "Annalt", "MAGE", 25, profs=[TAIL], saved=saved)
     w.clients.append(annalt)
@@ -396,7 +455,37 @@ def scenario_alts():
     check(c is not None and c.main == anna.key, "Bob ser Annalt som alt af Anna")
     check(("i", 2996) in bob.recipe_ids(annalt.key), "Bob kender Annalts tailoring-recipes")
     check(bob.recipe_ids(anna.key) == {("i", 13510), ("i", 13446)}, "Bob har stadig Annas recipes i cache")
-    lua_errors(annalt, bob)
+
+    # Craft List: kan en af ens egne alts lave det, står den på rækken (kort navn), også selvom en
+    # anden crafter er online og derfor sorteres først.
+    cara = Client(w, "Cara", "MAGE", 60, profs=[ALCH], talents=(0, 0, 31))
+    w.clients.append(cara)
+    cara.login()
+    cara.open_trade("Alchemy")
+    w.step(60)
+    ns = annalt.ns
+    ns.Data.CraftListAdd(ns.Data, "i", 13510, 1)
+    ns.UI.ShowTab(ns.UI, "Craft List")
+    w.step(2)
+    def crafter_row(client, name):
+        return _strip(client.L.eval("""function(name)
+            for _, f in ipairs(sim_allFrames) do
+                local item = rawget(f, "item")
+                if item and rawget(f, "toggle") and f:IsVisible() and item.name == name then
+                    return f.guild.sim_text
+                end
+            end
+        end""")(name))
+
+    row = crafter_row(annalt, "Flask of the Titans")
+    check(row == "Crafter: Anna +1", f"Craft List foretrækker ens egen alt frem for en online crafter ({row})")
+    # Set fra en anden spiller: kun det korte navn, ikke "Annalt (alt of Anna)".
+    cara.ns.Data.CraftListAdd(cara.ns.Data, "i", 2568, 1)
+    cara.ns.UI.ShowTab(cara.ns.UI, "Craft List")
+    w.step(2)
+    row = crafter_row(cara, "Brown Linen Vest")
+    check(row.startswith("Crafter: Annalt") and "alt of" not in row, f"Crafteren står med det korte navn ({row})")
+    lua_errors(annalt, bob, cara)
 
 
 def scenario_ui():
@@ -1145,6 +1234,13 @@ def scenario_ux():
     me.prints.clear()
     me.slash("help")
     check(any("/gc <text>" in p for p in me.prints), "/gc help nævner søgningen")
+    # "|h" og "|a" er styrekoder i chatten: i spillet blev "tank|healer|dps|auto" til "tankealer|dps|uto".
+    role_help = next((p for p in me.prints if "/gc role" in p), "")
+    check("tank|healer|dps|auto" in role_help, f"/gc help viser \"|\" rigtigt i chatten ({role_help})")
+    me.slash("role nonsense")
+    check("tank|healer|dps|auto" in me.prints[-1], f"... også i \"Usage: /gc role\" ({me.prints[-1]})")
+    me.slash("mats")
+    check("/gc mats on|off" in me.prints[-1], f"... og i /gc mats ({me.prints[-1]})")
 
     # Shift-klik på et item i taskerne sætter navnet i søgefeltet (som i AH), men kun når chatten er lukket.
     link = "|cffffffff|Hitem:13510::::::::|h[Flask of the Titans]|h|r"
@@ -1316,6 +1412,9 @@ def scenario_test_copy():
     check(head(test, "SavedVariables") == "## SavedVariables: GuildCraftersTestDB",
           f"Testudgaven gemmer i GuildCraftersTestDB ({head(test, 'SavedVariables')})")
     check(head(test, "X-Curse-Project-ID") is None, "Testudgaven har intet CurseForge-projekt-id")
+    # Release notes (CHANGELOG.md, se .pkgmeta) skal være skrevet til den version, der udgives.
+    notes = open(os.path.join(ROOT, "CHANGELOG.md"), encoding="utf-8").readline().strip()
+    check(notes == f"# GuildCrafters {toc_version()}", f"CHANGELOG.md starter med den aktuelle version ({notes})")
 
     # Testudgaven alene: kører som normalt, synkroniserer med den udgivne og gemmer i sin egen global.
     w = World()
@@ -1371,6 +1470,678 @@ def scenario_test_copy():
     lua_errors(anna, both)
 
 
+# ----------------------------------------------------------------------
+# 0.15: stabilitet. Vennerne kører den udgivne 0.14 (OLD), mens 0.15 testes i samme guild.
+# ----------------------------------------------------------------------
+
+DAY = 86400
+
+
+def _cache_profs(client, key):
+    c = client.cache(key)
+    return {k: v.rank for k, v in c.profs.items()} if c else {}
+
+
+def _my_profs(client):
+    return sorted(client.db.myChars[client.key].profs.keys())
+
+
+def _has_icon(client, name):
+    return "QuestionMark" not in client.ns.UI.ProfIcon(name)
+
+
+def _crafters(client, kind, rid):
+    ns = client.ns
+    return [k.split("-")[0] for _, k in ns.Index.Crafters(ns.Index, kind, rid).items()]
+
+
+def _rejoin(w, old, **kw):
+    """Samme spiller logger ind igen som en ny klient (fx 0.15 efter 0.14) på den gamle plads i guilden."""
+    new = _player(w, old.name, old.spec, **kw)
+    w.clients[w.clients.index(old)] = new
+    return new
+
+
+def _leave(w, c):
+    """Forlader guilden (og er offline): står ikke længere i rosteren."""
+    if c.online:
+        c.logout()
+    c.guild = None
+    w.push_roster()
+
+
+def scenario_old_data():
+    print("\nScenarie 17: 0.14-klienter i samme guild, og gemte data i 0.14-format")
+    w = World()
+    anna = _player(w, "Anna", [ALCH], source=OLD)
+    bob = _player(w, "Bob", [TAIL], source=OLD)
+    zed = _player(w, "Zed", [ENCH], source=OLD)
+    for c in (anna, bob, zed):
+        _join(w, c, 2)
+    w.step(120)
+    check(anna.g.sim_version == "0.14.0" and anna.ns.Sync.IsGone is None,
+          f"Klienten fra tagget {OLD} kører den gamle kode (version {anna.g.sim_version})")
+    check(not _missing([anna, bob, zed]), f"Tre 0.14-klienter synkroniserer som før ({_missing([anna, bob, zed])})")
+
+    # Bob opdaterer til 0.15 med sine gemte data; Zed har forladt guilden i mellemtiden.
+    old_v = bob.db.myChars[bob.key].v.recipes
+    saved = bob.logout()
+    _leave(w, zed)
+    bob = _rejoin(w, bob, saved=saved)
+    _join(w, bob, 90)
+    me = bob.db.myChars[bob.key]
+    check(old_v < 100 and me.v.recipes == old_v, f"Små versionstællere fra 0.14 bevares, når intet er ændret ({old_v} -> {me.v.recipes})")
+    check(_my_profs(bob) == ["Tailoring"] and _knows(anna, bob), "Egne professions og recipes er uændrede, og Anna (0.14) kender dem stadig")
+    check(_knows(bob, anna), "Cachen af Anna overlever opdateringen")
+    c = bob.cache(zed.key)
+    check(c is not None and "Zed" not in _crafters(bob, "e", 7418),
+          "Zed (ikke længere i rosteren) er skjult i 0.15, men endnu ikke slettet")
+    check("Zed" in _crafters(anna, "e", 7418), "... og vises stadig hos Anna på 0.14 (forventet)")
+
+    # En ændring hos Bob får en version, der er højere end alt, 0.14 har set, og når frem.
+    bob.g.sim_me.profs[1].recipes[3] = 14047
+    bob.open_trade("Tailoring")
+    w.step(60)
+    check(me.v.recipes > 1_000_000_000, f"Ny version er et tidsstempel ({me.v.recipes})")
+    check(("i", 14047) in anna.recipe_ids(bob.key), "0.14-klienten henter ændringen fra 0.15")
+    anna.g.sim_me.profs[1].recipes[3] = 2996
+    anna.open_trade("Alchemy")
+    w.step(60)
+    check(("i", 2996) in bob.recipe_ids(anna.key), "0.15-klienten henter en ændring fra 0.14")
+    lua_errors(anna, bob)
+
+
+def scenario_locale():
+    print("\nScenarie 18: professions uafhængigt af klientens sprog")
+    herb = {"name": "Herbalism", "rank": 150, "max": 225, "recipes": []}
+    w = World()
+    hans = _player(w, "Hans", [ALCH, ENCH, herb], locale="deDE")
+    eve = _player(w, "Eve", [TAIL], source=OLD)                     # engelsk klient på 0.14
+    _join(w, hans, 2)
+    _join(w, eve, 120)
+    check(_my_profs(hans) == ["Alchemy", "Enchanting", "Herbalism"],
+          f"Tysk klient gemmer professions under engelske nøgler ({_my_profs(hans)})")
+    seen = _cache_profs(eve, hans.key)
+    check(seen == {"Alchemy": 300, "Enchanting": 100, "Herbalism": 150}, f"Engelsk 0.14-klient ser dem med rank ({seen})")
+    check(all(_has_icon(eve, n) for n in seen), "... og med ikon")
+    check(_knows(eve, hans) and _knows(hans, eve), "Recipes går begge veje")
+    seen = _cache_profs(hans, eve.key)
+    check(seen == {"Tailoring": 75} and _has_icon(hans, "Tailoring"), f"Den tyske klient ser den engelske med ikon ({seen})")
+    lua_errors(hans, eve)
+
+    # Tysk klient på 0.14: nøglerne er tyske. En engelsk 0.15-klient oversætter dem, den kender, og
+    # sender dem uændret videre (relay), mens ejeren er offline.
+    w = World()
+    karl = _player(w, "Karl", [ALCH, herb], source=OLD, locale="deDE")
+    amy = _player(w, "Amy", [TAIL])
+    _join(w, karl, 2)
+    _join(w, amy, 120)
+    check(_my_profs(karl) == ["Alchemie", "Kräuterkunde"], f"0.14 på tysk gemmer tyske navne ({_my_profs(karl)})")
+    seen = _cache_profs(amy, karl.key)
+    check(seen == {"Alchemy": 300, "Herbalism": 150} and _knows(amy, karl),
+          f"0.15 oversætter modtagne tyske navne og har recipes under dem ({seen})")
+    saved = karl.logout()
+    w.step(5)
+    olaf = _player(w, "Olaf", [ENCH], source=OLD)
+    _join(w, olaf, 120)
+    seen = _cache_profs(olaf, karl.key)
+    check(seen == {"Alchemie": 300, "Kräuterkunde": 150} and _knows(olaf, karl),
+          f"Relay fra 0.15 giver ejerens egne navne videre til en 0.14-klient ({seen})")
+
+    # Karl opdaterer til 0.15: hans egne nøgler migreres, og de andre får de engelske navne.
+    karl = _rejoin(w, karl, saved=saved, locale="deDE")
+    _join(w, karl, 120)
+    check(_my_profs(karl) == ["Alchemy", "Herbalism"] and _knows(amy, karl),
+          f"Egne tyske nøgler migreres til engelske, og recipes følger med ({_my_profs(karl)})")
+    seen = _cache_profs(olaf, karl.key)
+    check(seen == {"Alchemy": 300, "Herbalism": 150} and _knows(olaf, karl),
+          f"0.14-klienten har nu de engelske navne og ingen dubletter ({seen})")
+    check(_cache_profs(karl, amy.key) == {"Tailoring": 75}, "Cachen hos den opdaterede klient er intakt")
+    lua_errors(karl, amy, olaf)
+
+    # Et sprog, addonen ikke har en tabel for: opslaget via spellnavne finder alt undtagen Herbalism,
+    # som så vises under klientens eget navn (som før 0.15).
+    w = World()
+    xavi = _player(w, "Xavi", [ALCH, herb], locale="xxXX")
+    _join(w, xavi, 20)
+    check(_my_profs(xavi) == ["Alchemy", "Herbalism~xx"], f"Ukendt sprog: spellnavne giver nøglen ({_my_profs(xavi)})")
+    lua_errors(xavi)
+
+    # Mainline: professionens ID giver nøglen, uanset navn.
+    w = World()
+    mia = _player(w, "Mia", [ALCH, ENCH, herb], locale="xxXX", flavor="mainline")
+    ben = _player(w, "Ben", [TAIL], flavor="mainline")
+    _join(w, mia, 2)
+    _join(w, ben, 120)
+    check(_my_profs(mia) == ["Alchemy", "Enchanting", "Herbalism"] and _knows(ben, mia),
+          f"Mainline bruger professions-ID'er ({_my_profs(mia)})")
+    lua_errors(mia, ben)
+
+
+def scenario_versions():
+    print("\nScenarie 19: versioner overlever tomme gemte data (geninstallation, ny pc, testudgaven)")
+    w = World()
+    anna = _player(w, "Anna", [ALCH], source=OLD)
+    bob = _player(w, "Bob", [TAIL], source=OLD)
+    _join(w, anna, 2)
+    _join(w, bob, 60)
+    # Anna har ændret meget gennem tiden: høje tællere, som Bob har i cachen.
+    me = anna.db.myChars[anna.key]
+    me.v.recipes, me.v.info = 57, 80
+    anna.slash("role tank")
+    w.step(60)
+    check(bob.cache(anna.key).dataV.recipes == 57, "Bob (0.14) har Annas recipes i version 57")
+
+    # Anna geninstallerer (ingen gemte data) og har lært en ny recipe siden.
+    anna.logout()
+    w.step(5)
+    more = dict(ALCH, recipes=[13510, 13446, 2996])
+    anna = _rejoin(w, anna)
+    anna.spec = [more]
+    anna.g.sim_me.profs[1].recipes[3] = 2996
+    _join(w, anna, 90)
+    v = anna.db.myChars[anna.key].v
+    check(v.recipes > 57 and v.info > 81, f"Efter geninstallation er versionerne højere end de gamle ({v.recipes})")
+    check(_knows(bob, anna), "Bob henter de nye data, selvom Annas tællere startede forfra")
+    check(bob.cache(anna.key).addonVer == toc_version(), "... og ser hendes nye addon-version")
+    check(_knows(anna, bob), "Anna har Bobs data igen")
+    lua_errors(anna, bob)
+
+
+def scenario_cleanup():
+    print("\nScenarie 20: automatisk oprydning, kun lokalt")
+    herb = {"name": "Herbalism", "rank": 150, "max": 225, "recipes": []}
+
+    def gone_mark(client, key):
+        c = client.cache(key)
+        return c.gone if c else None
+
+    # Et medlem forlader guilden; en 0.14-klient bliver ved med at annoncere og relaye det.
+    w = World()
+    old = _player(w, "Gammel", [ALCH], source=OLD)
+    ny = _player(w, "Ny", [TAIL])
+    zed = _player(w, "Zed", [ENCH], source=OLD)
+    yan = _player(w, "Yan", [ALCH], source=OLD)
+    for c in (old, ny, zed, yan):
+        _join(w, c, 2)
+    w.step(120)
+    check(_knows(ny, zed) and "Zed" in _crafters(ny, "e", 7418), "Før: Ny kender Zeds recipes")
+    _leave(w, zed)
+    _leave(w, yan)
+    w.step(5)
+    check(not ny.ns.Sync.IsGone(ny.ns.Sync, zed.key) and "Zed" in _crafters(ny, "e", 7418),
+          "Zed sendte en HELLO for lidt siden: han regnes stadig for medlem (rosteren kan være bagud)")
+    w.step(1000)
+    w.push_roster()
+    check(ny.ns.Sync.IsGone(ny.ns.Sync, zed.key) and "Zed" not in _crafters(ny, "e", 7418),
+          "Et kvarter efter hans sidste HELLO, og stadig ikke i rosteren: skjult")
+    check(ny.cache(zed.key) is not None, "... men data slettes ikke endnu")
+    first = gone_mark(ny, zed.key)
+    check(first is not None, "Fraværet får et tidsstempel første gang, det ses med komplet roster")
+
+    # En ny 0.15-klient logger ind: 0.14-klienten annoncerer Zed (INVR), men ingen 0.15 beder om ham.
+    cara = _player(w, "Cara", [TAIL])
+    _join(w, cara, 120)
+    check(cara.cache(zed.key) is None and _knows(cara, old), "Ny 0.15-klient henter ikke den, der er gået, fra 0.14-relay")
+    olga = _player(w, "Olga", [TAIL], source=OLD)
+    _join(w, olga, 120)
+    check(olga.cache(zed.key) is not None, "En 0.14-klient henter ham stadig fra en anden 0.14 (forventet)")
+    sent_by_ny = len([m for m in w.sent if m[1] == "Ny"])
+
+    # Yan kommer tilbage efter 3 dage: mærket fjernes, og intet er tabt.
+    w.epoch += 3 * DAY
+    yan.guild = GUILD
+    w.step(300)
+    w.push_roster()
+    check(gone_mark(ny, yan.key) is None and "Yan" in _crafters(ny, "i", 13510), "Tilbage inden 7 dage: mærket fjernes, data er der stadig")
+    check(gone_mark(ny, zed.key) == first and ny.cache(zed.key) is not None, "Zed er stadig kun mærket efter 3 dage")
+
+    # Efter 7 dage slettes Zed lokalt, og han kommer ikke tilbage via 0.14-klienternes sync.
+    w.epoch += 4 * DAY + 60
+    w.step(300)
+    w.push_roster()
+    check(ny.cache(zed.key) is None, "Efter 7 dage er Zed slettet lokalt")
+    dora = _player(w, "Dora", [TAIL], source=OLD)       # et login får 0.14-klienterne til at annoncere igen
+    _join(w, dora, 120)
+    check(ny.cache(zed.key) is None and cara.cache(zed.key) is None, "... og kommer ikke tilbage, selvom 0.14 stadig annoncerer ham")
+    check(old.cache(zed.key) is not None, "0.14-klienten har ham stadig (der sendes ingen sletning)")
+    lua_errors(old, ny, cara)
+
+    # Login før rosteren er indlæst, og en roster, der kun viser online-medlemmer: ingen må skjules.
+    saved = ny.logout()
+    for mode in ("empty", "online", "online_total"):
+        w.epoch += 8 * DAY
+        ny = _rejoin(w, ny, saved=saved)
+        ny.roster_mode = mode
+        _join(w, ny, 30)
+        w.step(300)
+        w.push_roster()
+        check(not ny.ns.Sync.RosterComplete(ny.ns.Sync), f"Roster \"{mode}\": regnes ikke for komplet")
+        check(gone_mark(ny, yan.key) is None and "Yan" in _crafters(ny, "i", 13510),
+              f"Roster \"{mode}\": offline medlem er hverken skjult eller mærket")
+        ny.roster_mode = "full"
+        ny.set_roster()
+        check(ny.ns.Sync.RosterComplete(ny.ns.Sync) and "Yan" in _crafters(ny, "i", 13510),
+              f"Roster \"{mode}\" -> fuld: komplet, og Yan er der stadig")
+        lua_errors(ny)
+        saved = ny.logout()
+
+    # To ugers pause: A er stadig med (ikke set længe), B var mærket før pausen, C går i pausen.
+    w = World()
+    ny = _player(w, "Ny", [TAIL])
+    a = _player(w, "Aase", [ALCH], source=OLD)
+    b = _player(w, "Birk", [ENCH], source=OLD)
+    c = _player(w, "Carl", [ALCH], source=OLD)
+    for x in (ny, a, b, c):
+        _join(w, x, 2)
+    w.step(120)
+    for x in (a, b, c):
+        x.logout()
+    _leave(w, b)
+    w.step(1000)
+    w.push_roster()
+    check(gone_mark(ny, b.key) is not None, "Birk er mærket før pausen")
+    saved = ny.logout()
+    w.epoch += 14 * DAY
+    c.guild = None
+    ny = _rejoin(w, ny, saved=saved)
+    _join(w, ny, 30)
+    check(ny.cache(b.key) is not None, "Lige efter login ryddes der ikke op (rosteren skal falde til ro)")
+    w.step(40)
+    check(ny.cache(a.key) is not None and gone_mark(ny, a.key) is None and "Aase" in _crafters(ny, "i", 13510),
+          "To ugers pause: et medlem, der stadig er med, røres ikke (selvom det er længe siden, det blev set)")
+    check(ny.cache(b.key) is None, "Den, der var mærket før pausen, er slettet ved login")
+    check(ny.cache(c.key) is not None and gone_mark(ny, c.key) is not None and "Carl" not in _crafters(ny, "i", 13510),
+          "Den, der gik i pausen, er skjult og mærket, men ikke slettet")
+    lua_errors(ny)
+
+    # Droppet profession: kun når Skills-listen er komplet.
+    w = World()
+    jeg = _player(w, "Jeg", [TAIL, herb])
+    ven = _player(w, "Ven", [ALCH], source=OLD)
+    jeg.g.sim_skillsLoaded = False              # listen er tom lige efter login
+    _join(w, jeg, 2)
+    jeg.g.sim_skillsLoaded = True
+    _join(w, ven, 60)
+    check(_my_profs(jeg) == ["Herbalism", "Tailoring"], f"Tom Skills-liste lige efter login dropper intet ({_my_profs(jeg)})")
+    jeg.g.sim_skillsCollapsed = True            # lukket overskrift skjuler professionerne
+    jeg.g.sim_fire("SKILL_LINES_CHANGED")
+    w.step(10)
+    check(_my_profs(jeg) == ["Herbalism", "Tailoring"] and jeg.db.myChars[jeg.key].dropped is None,
+          "Lukket overskrift i Skills: intet regnes for droppet")
+    jeg.g.sim_skillsCollapsed = False
+    jeg.L.execute("table.remove(sim_me.profs, 1)")      # Tailoring droppes
+    jeg.g.sim_fire("SKILL_LINES_CHANGED")
+    w.step(60)
+    me = jeg.db.myChars[jeg.key]
+    check(_my_profs(jeg) == ["Herbalism"] and me.dropped is not None and me.dropped.Tailoring is not None,
+          "Droppet profession: skjult og mærket med det samme")
+    check(any("Tailoring is no longer on this character" in p for p in jeg.prints), "... og det står i chatten")
+    check(_cache_profs(ven, jeg.key) == {"Herbalism": 150} and not ven.recipe_ids(jeg.key),
+          f"Vennen (0.14) ser den ikke længere ({_cache_profs(ven, jeg.key)})")
+    # Lært igen inden 7 dage: recipes er der stadig uden et nyt scan.
+    w.epoch += 3 * DAY
+    jeg.L.execute("table.insert(sim_me.profs, 1, { name = 'Tailoring', rank = 75, max = 75, recipes = {} })")
+    jeg.g.sim_fire("SKILL_LINES_CHANGED")
+    w.step(60)
+    check(_my_profs(jeg) == ["Herbalism", "Tailoring"] and me.dropped is None and _knows(ven, jeg),
+          "Dukker den op igen inden 7 dage, er recipes der stadig, også hos vennen")
+    jeg.L.execute("table.remove(sim_me.profs, 1)")
+    jeg.g.sim_fire("SKILL_LINES_CHANGED")
+    w.step(10)
+    w.epoch += 7 * DAY + 60
+    jeg.g.sim_fire("SKILL_LINES_CHANGED")
+    check(me.dropped is None and _my_profs(jeg) == ["Herbalism"], "Efter 7 dage er den droppede profession slettet lokalt")
+    jeg.slash("forget herbalism")
+    check(_my_profs(jeg) == [], "/gc forget virker stadig")
+    lua_errors(jeg, ven)
+
+
+def scenario_combat():
+    print("\nScenarie 21: sync holder pause i kamp")
+    w = World()
+    ejer = _player(w, "Ejer", [ALCH])
+    ven = _player(w, "Ven", [TAIL], source=OLD)
+    _join(w, ejer, 2)
+    _join(w, ven, 90)
+    check(not _missing([ejer, ven]), "Før kampen: begge er synkroniseret")
+    ejer.ns.debugComm = True
+
+    def sent_by(name, since):
+        return [m for m in w.sent if m[1] == name and m[0] > since]
+
+    # Ejer lærer en recipe; hans HELLO når lige ud, før han går i kamp. Vennens REQ kommer midt i kampen.
+    ejer.g.sim_me.profs[1].recipes[3] = 2996
+    ejer.spec[0]["recipes"] = [13510, 13446, 2996]
+    ejer.open_trade("Alchemy")
+    before = len(sent_by("Ejer", 0))
+    while len(sent_by("Ejer", 0)) == before:
+        w.step(0.1)
+    ejer.combat(True)
+    start = w.now
+    status = ejer.ns.Sync.StatusText(ejer.ns.Sync)
+    check(status == "Sync paused (in combat)", f"Statuslinjen siger, at sync holder pause ({status})")
+    ven.g.sim_me.profs[1].recipes[3] = 14047       # vennen ændrer også noget imens
+    ven.spec[0]["recipes"] = [2996, 2568, 14047]
+    ven.open_trade("Tailoring")
+    w.step(60)
+    ejer.slash("sync")
+    check("You are in combat" in ejer.prints[-1], f"/gc sync i kamp venter ({ejer.prints[-1]})")
+    cara = _player(w, "Cara", [ENCH])              # en ny logger ind og spørger alle (HELLO med q)
+    _join(w, cara, 0)
+    w.step(240)
+    check(any(m[1] == "Ven" for m in w.sent if m[0] > start) and not _knows(ven, ejer),
+          "I kamp i 5 minutter: vennen har spurgt, men ikke fået svar")
+    check(len(sent_by("Ejer", start)) == 0, f"Ejer sender intet i kamp ({len(sent_by('Ejer', start))} beskeder)")
+    check(not _knows(ejer, ven), "... og behandler ikke det, han modtager")
+    check(not any("did not come back" in p or "not getting through" in p for p in ejer.prints)
+          and not ejer.ns.Comm.guildBlocked,
+          "Ekkoet af hans egen besked blev set i kampen: reserve-transporten er ikke slået til")
+
+    ejer.combat(False)
+    w.step(20)
+    check(_knows(ven, ejer), "Kort efter kampen har vennen den nye recipe (uden at vente på hjerteslaget)")
+    check(_knows(ejer, ven) and _knows(ejer, cara), "... og ejer har hentet det, han gik glip af")
+    check(_knows(cara, ejer), "Den nye, der spurgte under kampen, har fået svar")
+    check(not ejer.ns.Comm.guildBlocked and ejer.ns.Sync.StatusText(ejer.ns.Sync) != "Sync paused (in combat)",
+          "Pausen er slut, og reserve-transporten er stadig slået fra")
+    lua_errors(ejer, ven, cara)
+
+    # Rækkefølgen efter kampen. En HELLO, der blev køet i kampen, må ikke gå ud EFTER en nyere: alle
+    # modtagere gemmer den seneste HELLO, de hører, så den forældede ville vinde.
+    ejer.combat(True)
+    ejer.slash("role tank")
+    w.step(12)                                      # HELLO med TANK ligger nu i køen
+    ejer.db.myChars[ejer.key].roleOverride = "HEALER"   # ændret igen (uden at planlægge endnu en HELLO)
+    ejer.combat(False)
+    ejer.ns.Sync.SendHello(ejer.ns.Sync, False)     # en ny HELLO lige efter kampen, før køen er sendt
+    w.step(8)
+    roles = (ven.cache(ejer.key).role, cara.cache(ejer.key).role)
+    check(roles == ("HEALER", "HEALER"), f"Efter kampen vinder den nyeste HELLO, ikke den fra køen ({roles})")
+    w.step(15)
+
+    # Det samme den anden vej: mens de gemte beskeder behandles (én pr. 0,1 s), skal nye bag i køen.
+    ejer.combat(True)
+    ser = ejer.L.eval('(LibStub("AceSerializer-3.0"))')
+    for i in range(150):
+        text = ser.Serialize(ser, ejer.L.table_from({"t": "INVR", "p": 2, "l": ejer.L.table(), "x": i}))
+        ejer.g.sim_deliver("GCRAFT", text, "GUILD", ven.key)
+    ven.slash("role tank")
+    w.step(15)                                      # vennens HELLO med TANK ligger sidst i køen
+    ven.slash("role dps")
+    ejer.combat(False)
+    ven.ns.Sync.SendHello(ven.ns.Sync, False)       # hans nye HELLO kommer, mens køen tømmes
+    w.step(40)
+    check(ejer.cache(ven.key).role == "DPS",
+          f"Beskeder modtaget, mens køen tømmes, behandles efter de gemte ({ejer.cache(ven.key).role})")
+    lua_errors(ejer, ven, cara)
+
+    # En fejl i én gemt besked må ikke stoppe resten af køen (hverken nu eller i næste kamp).
+    ejer.L.eval("function(ns) ns.Comm:Handle('BOOM', function() error('boom') end) end")(ejer.ns)
+    for role in ("healer", "tank"):
+        ejer.combat(True)
+        ejer.g.sim_deliver("GCRAFT", ser.Serialize(ser, ejer.L.table_from({"t": "BOOM", "p": 2})), "GUILD", ven.key)
+        ven.slash("role " + role)
+        w.step(15)
+        ejer.combat(False)
+        w.step(10)
+    errs = [e for _, e in ejer.g.sim_errors.items()]
+    check(len(errs) == 2 and all("boom" in e for e in errs) and ejer.cache(ven.key).role == "TANK",
+          f"En fejl i en gemt besked stopper ikke køen ({len(errs)} fejl, rolle {ejer.cache(ven.key).role})")
+    ejer.L.execute("sim_errors = {}")
+
+    # Åbent vindue: det opdateres ikke af sig selv i kamp, men lige efter.
+    ejer.slash("")
+    ejer.ns.UI.ShowTab(ejer.ns.UI, "Crafting")
+    w.step(3)
+    L = ejer.L
+    L.execute("""sim_refreshes = 0
+        local frame = GuildCraftersCraftingSearch:GetParent()
+        for _, f in ipairs(sim_allFrames) do
+            if f.sim_parent == frame and f.sim_kind == "FontString" then
+                local set = f.SetText
+                rawset(f, "SetText", function(self, t) sim_refreshes = sim_refreshes + 1 return set(self, t) end)
+            end
+        end""")
+    ejer.combat(True)
+    ven.slash("role healer")
+    w.step(30)
+    check(L.eval("sim_refreshes") == 0, f"Vinduet opdateres ikke af sig selv i kamp ({L.eval('sim_refreshes')})")
+    ejer.combat(False)
+    w.step(10)
+    check(L.eval("sim_refreshes") > 0 and ejer.cache(ven.key).role == "HEALER", "... men lige efter kampen")
+    lua_errors(ejer, ven)
+
+    # Mainline: klientens lockdown-funktioner må ikke styre pausen. Set i Retail 12.1.0: en af dem
+    # svarer true uden for kamp; da de talte som "i kamp", stod sync stille for evigt, Crafting-fanen
+    # var tom, og rundturen gav 8 fejl.
+    w = World()
+    mia = _player(w, "Mia", [ALCH], flavor="mainline")
+    ben = _player(w, "Ben", [TAIL], flavor="mainline")
+    mia.g.sim_lockdown = True               # fra start, som i Retail
+    _join(w, mia, 2)
+    _join(w, ben, 90)
+    check(_knows(mia, ben) and _knows(ben, mia), "Mainline med lockdown-funktioner, der svarer true: sync kører")
+    status = mia.ns.Sync.StatusText(mia.ns.Sync)
+    check(not mia.ns.Comm.paused and "paused" not in status, f"... og statuslinjen siger ikke pause ({status})")
+    mia.slash("role tank")
+    w.step(20)
+    check(ben.cache(mia.key).role == "TANK", "... og ændringer sendes med det samme")
+    mia.slash("")                           # vinduet åbnes (indekset bygges), derefter kommer nye data
+    mia.ns.UI.ShowTab(mia.ns.UI, "Crafting")
+    w.step(3)
+    mia.prints.clear()
+    mia.slash("debug tour")
+    w.step(70)
+    report = mia.db.debugTour
+    errors = [f"{e.step}: {e.msg}" for _, e in report.errors.items()] if report else ["ingen rapport"]
+    check(not errors, "... og rundturen finder recipes i Crafting (0 fejl)" + (f" ({errors[0]})" if errors else ""))
+    mia.slash("debug ping")
+    w.step(6)
+    line = next((p for p in mia.prints if "Lockdown:" in p), "")
+    check("combat=false" in line and "InChatMessagingLockdown=true" in line and "sync paused=false" in line,
+          f"/gc debug ping viser, hvad klienten svarer ({line})")
+    mia.combat(True)                        # rigtig kamp pauser stadig
+    check(mia.ns.Sync.StatusText(mia.ns.Sync) == "Sync paused (in combat)", "Rigtig kamp pauser stadig på Mainline")
+    mia.combat(False)
+    lua_errors(mia, ben)
+
+
+def scenario_status():
+    print("\nScenarie 22: /gc tooltip, /gc sync og statuslinjen")
+    w = World()
+    anna = _player(w, "Anna", [ALCH], source=OLD)
+    bob = _player(w, "Bob", [TAIL])
+    _join(w, anna, 2)
+    _join(w, bob, 90)
+    ns, L, g = bob.ns, bob.L, bob.g
+
+    # /gc tooltip off: linjerne forsvinder fra spillets tooltips, men ikke fra addonens eget vindue.
+    check(any("Crafted by" in l for l in bob.tooltip(13510)), "Standard: \"Crafted by\" på item-tooltips")
+    bob.slash("tooltip off")
+    check(not any("Crafted by" in l or "Guild has" in l for l in bob.tooltip(13510)), "/gc tooltip off fjerner linjerne")
+    check(bob.db.settings.tooltip is False, "... og valget gemmes")
+    bob.slash("")
+    ns.UI.ShowTab(ns.UI, "Crafting")
+    w.step(3)
+    lines = L.eval("""function()
+        GameTooltip.sim_lines = {}
+        for _, f in ipairs(sim_allFrames) do
+            local item = rawget(f, "item")
+            if item and item.keys and item.name == "Flask of the Titans" and f:IsVisible() and f.sim_scripts.OnEnter then
+                f.sim_scripts.OnEnter(f)
+                break
+            end
+        end
+        return GameTooltip.sim_lines
+    end""")()
+    check(any("Crafted by" in l for _, l in lines.items()), "I addonens eget vindue står \"Crafted by\" der stadig")
+    bob.slash("tooltip")
+    check("are off" in bob.prints[-1] and "/gc tooltip on|off" in bob.prints[-1], f"/gc tooltip viser valget ({bob.prints[-1]})")
+    bob.slash("tooltip on")
+    check(any("Crafted by" in l for l in bob.tooltip(13510)), "/gc tooltip on slår dem til igen")
+
+    # Statuslinjen til højre i fodlinjen.
+    # Teksten, som den står i vinduet (opdateres af sig selv hvert 15. sekund og ved ændringer).
+    def status_shown():
+        return L.eval("""function()
+            for _, f in ipairs(sim_allFrames) do
+                local text = rawget(f, "text")
+                if f.sim_kind == "Button" and f.sim_parent == GuildCraftersFrame and type(text) == "table"
+                    and f:IsVisible() then
+                    return text.sim_text
+                end
+            end
+        end""")() or "(ingen statuslinje)"
+
+    anna.slash("role tank")                 # en besked fra Anna: noget at høre fra hende lige nu
+    w.step(20)
+    check(status_shown() == "Synced just now · 1 with addon", f"Statuslinjen i vinduet ({status_shown()})")
+    w.step(220)
+    check(re.fullmatch(r"Synced [3-5] min ago · 1 with addon", status_shown()), f"... følger med tiden ({status_shown()})")
+    tip = [l for _, l in ns.Sync.StatusLines(ns.Sync).items()]
+    check(re.fullmatch(r"Last update: [3-5] min ago \(from Anna\)", tip[0])
+          and tip[1:] == ["1 online with GuildCrafters, 1 known", "Type /gc sync to ask the guild now"],
+          f"Tooltippen på statuslinjen ({tip})")
+
+    # /gc sync: Bobs cache er forældet (som efter en tabt besked); et manuelt sync henter det med det samme.
+    c = bob.cache(anna.key)
+    c.dataV.recipes = 0
+    c.profs.Alchemy["items"] = L.table()
+    check(not _knows(bob, anna), "Før /gc sync mangler Bob Annas recipes")
+    bob.prints.clear()
+    bob.slash("sync")
+    check(bob.prints[-1].endswith("Asking the guild for updates..."), f"/gc sync siger, at der spørges ({bob.prints[-1]})")
+    check(status_shown() == "Syncing...", f"Statuslinjen: \"Syncing...\" ({status_shown()})")
+    bob.slash("sync")
+    check("Just asked. Try again in" in bob.prints[-1], f"To gange i træk: vent lidt ({bob.prints[-1]})")
+    w.step(25)
+    check(_knows(bob, anna), "Bob har Annas recipes igen")
+    done = next((p for p in bob.prints if "Sync done" in p), "")
+    check(done.endswith("Sync done: 1 online with the addon, 1 update."), f"Resultatet står i chatten ({done})")
+    w.step(15)
+    check(status_shown() == "Synced just now · 1 with addon", f"Bagefter: tilbage til normal ({status_shown()})")
+    hellos = len([m for m in w.sent if m[1] == "Bob"])
+    for _ in range(5):
+        bob.slash("sync")
+        w.step(1)
+    check(len([m for m in w.sent if m[1] == "Bob"]) - hellos <= 1, "Gentagne /gc sync sender ikke en HELLO hver gang")
+
+    w.step(30)
+    anna.logout()
+    w.step(5)
+    check(status_shown() == "Nobody else online with the addon", f"Ingen andre online ({status_shown()})")
+    bob.prints.clear()
+    bob.slash("help")
+    check(any("/gc sync" in p for p in bob.prints) and any("/gc tooltip on|off" in p for p in bob.prints),
+          "/gc help nævner sync og tooltip")
+    lua_errors(anna, bob)
+
+    w = World()
+    solo = Client(w, "Solo", "ROGUE", 12, guild=None, profs=[TAIL])
+    w.clients = [solo]
+    solo.login()
+    solo.slash("")
+    solo.slash("sync")
+    check("not in a guild" in solo.prints[-1] and solo.ns.Sync.StatusText(solo.ns.Sync) == "",
+          f"Uden guild: /gc sync siger det, og statuslinjen er tom ({solo.prints[-1]})")
+    lua_errors(solo)
+
+
+def scenario_review():
+    print("\nScenarie 23: sikringer fundet i review af 0.15")
+    herb = {"name": "Herbalism", "rank": 150, "max": 225, "recipes": []}
+
+    # Alene online, og rosteren tæller kun online-medlemmer: det er ikke en komplet roster.
+    w = World()
+    ny = _player(w, "Ny", [TAIL])
+    aase = _player(w, "Aase", [ALCH], source=OLD)
+    _join(w, ny, 2)
+    _join(w, aase, 90)
+    saved = ny.logout()
+    aase.logout()
+    w.epoch += 8 * DAY
+    for _ in range(2):                              # to logins med 8 dage imellem: intet må slettes
+        ny = _rejoin(w, ny, saved=saved)
+        ny.roster_mode = "online_total"
+        _join(w, ny, 400)
+        w.push_roster()
+        c = ny.cache(aase.key)
+        check(not ny.ns.Sync.RosterComplete(ny.ns.Sync) and c is not None and c.gone is None
+              and "Aase" in _crafters(ny, "i", 13510), "Alene online i en roster, der kun tæller online: ingen skjules eller mærkes")
+        saved = ny.logout()
+        w.epoch += 8 * DAY
+    lua_errors(ny)
+
+    # Mangler over halvdelen af dem, vi kender, på én gang, er det rosteren, der er noget galt med.
+    w = World()
+    ny = _player(w, "Ny", [TAIL])
+    others = [_player(w, n, [ALCH], source=OLD) for n in ("Ask", "Bo", "Cai", "Dan", "Eli")]
+    _join(w, ny, 2)
+    for o in others:
+        _join(w, o, 2)
+    w.step(120)
+    for o in others[:3]:
+        _leave(w, o)
+    w.step(1000)
+    w.push_roster()
+    check(not ny.ns.Sync.RosterComplete(ny.ns.Sync) and ny.cache(others[0].key).gone is None
+          and "Ask" in _crafters(ny, "i", 13510), "3 af 5 kendte mangler på én gang: der konkluderes intet")
+    others[2].guild = GUILD                         # én af dem er der alligevel: nu mangler 2 af 5
+    w.push_roster()
+    check(ny.ns.Sync.RosterComplete(ny.ns.Sync) and "Ask" not in _crafters(ny, "i", 13510)
+          and "Cai" in _crafters(ny, "i", 13510), "2 af 5 mangler: de to skjules som normalt")
+    lua_errors(ny)
+
+    # Nyt medlem, som klientens kopi af rosteren ikke har med endnu: hun sender på guild-kanalen, så
+    # hun er med, og hendes data skal ikke afvises.
+    w = World()
+    ny = _player(w, "Ny", [TAIL])
+    bo = _player(w, "Bo", [ENCH], source=OLD)
+    _join(w, ny, 2)
+    _join(w, bo, 60)
+    ny.roster_skip = {"Kim"}
+    kim = _player(w, "Kim", [ALCH])
+    _join(w, kim, 120)
+    check(ny.ns.Sync.RosterComplete(ny.ns.Sync) and _knows(ny, kim) and "Kim" in _crafters(ny, "i", 13510),
+          "Nyt medlem, der mangler i rosteren, men sender HELLO: vises, og hendes recipes gemmes")
+    lua_errors(ny, kim)
+
+    # Info uden en profession, der havde recipes (fx en forældet HELLO): recipes hentes igen, når
+    # professionen er der igen, i stedet for at stå tom.
+    c = ny.cache(kim.key)
+    ny.L.eval("""function(ns, key)
+        ns.Data:ApplyPayload(key, "info", 1, { class = "MAGE", level = 60, profs = {} })
+    end""")(ny.ns, kim.key)
+    check(not _knows(ny, kim) and c.dataV.recipes == 0, "Info uden professionen: recipes regnes ikke længere for hentet")
+    kim.ns.Sync.SendHello(kim.ns.Sync, False)
+    w.step(20)
+    check(_knows(ny, kim), "... og hentes igen ved hendes næste HELLO")
+
+    # To navne for samme profession i én payload (ejeren har skiftet klientsprog): de lægges sammen.
+    n = ny.L.eval("""function(ns, key)
+        ns.Data:ApplyPayload(key, "recipes", 2000000000,
+            { p = { Alchemy = { i = { 13510, 13446 }, e = {} }, Alchemie = { i = { 2996 }, e = {} } } })
+        local n = 0
+        for _ in pairs(ns.Data:GetChar(key).profs.Alchemy.items) do n = n + 1 end
+        return n
+    end""")(ny.ns, kim.key)
+    check(n == 3, f"\"Alchemy\" og \"Alchemie\" i samme payload giver alle 3 recipes ({n})")
+    lua_errors(ny, kim)
+
+    # Mainline: en tom liste fra GetProfessions (ikke indlæst endnu) er ikke "alt er droppet".
+    w = World()
+    mia = _player(w, "Mia", [ALCH, herb], flavor="mainline")
+    _join(w, mia, 20)
+    mia.L.execute("sim_kept = sim_me.profs sim_me.profs = {}")
+    mia.g.sim_fire("SKILL_LINES_CHANGED")
+    w.step(5)
+    check(_my_profs(mia) == ["Alchemy", "Herbalism"] and mia.db.myChars[mia.key].dropped is None,
+          "Mainline: tom professionsliste dropper intet")
+    mia.L.execute("sim_me.profs = sim_kept")
+    lua_errors(mia)
+
+
 if __name__ == "__main__":
     scenario_sync()
     scenario_relay()
@@ -1387,6 +2158,13 @@ if __name__ == "__main__":
     scenario_mainline()
     scenario_ux()
     scenario_test_copy()
+    scenario_old_data()
+    scenario_locale()
+    scenario_versions()
+    scenario_cleanup()
+    scenario_combat()
+    scenario_status()
+    scenario_review()
     print()
     if failures:
         print(f"{len(failures)} FEJL")

@@ -132,7 +132,8 @@ function Methods:GetEffectiveScale() return 1 end
 function Methods:GetCenter() return 0, 0 end
 
 -- Tooltip
-function Methods:SetOwner() self.sim_lines = {} end
+function Methods:SetOwner(owner) self.sim_lines = {} self.sim_owner = owner end
+function Methods:GetOwner() return rawget(self, "sim_owner") end
 local function SetLineText(self, i, text)
     local name = rawget(self, "sim_name")
     if not name then return end
@@ -200,6 +201,9 @@ ItemRefTooltip = NewWidget("GameTooltip", "ItemRefTooltip")
 DEFAULT_CHAT_FRAME = NewWidget("Frame", "DEFAULT_CHAT_FRAME")
 function DEFAULT_CHAT_FRAME:AddMessage(text)
     local clean = tostring(text):gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
+    -- Som chatten i spillet: "||" vises som ét "|", mens et enkelt "|h"/"|a" er en styrekode og
+    -- forsvinder ("tank|healer|dps|auto" blev til "tankealer|dps|uto", set 2026-10-13).
+    clean = clean:gsub("||", "\1"):gsub("|h", ""):gsub("|a", "|"):gsub("\1", "|")
     table.insert(sim_prints, clean)
     sim_py_print(clean)
 end
@@ -223,7 +227,8 @@ function sim_fire(event, ...)
 end
 
 function GetTime() return sim_py_now() end
-function time() return BASE_TIME + math.floor(sim_py_now()) end
+-- sim_py_epoch: et spring i kalenderen (fx to uger logget af), uden at alle timere skal køres igennem.
+function time() return BASE_TIME + math.floor(sim_py_now()) + (sim_py_epoch and sim_py_epoch() or 0) end
 GetServerTime = time
 
 C_Timer = {}
@@ -354,6 +359,8 @@ function ChatEdit_InsertLink(text)
     return true
 end
 function InviteUnit() end
+sim_inCombat = false
+function InCombatLockdown() return sim_inCombat end
 
 RAID_CLASS_COLORS = {}
 LOCALIZED_CLASS_NAMES_MALE = {}
@@ -389,7 +396,18 @@ end
 function IsInGuild() return sim_me.guild ~= nil end
 function GetGuildInfo() return sim_me.guild end
 sim_roster = {}
-function GetNumGuildMembers() return #sim_roster end
+-- sim_rosterTotal: det samlede antal medlemmer, når rosteren kun viser nogle af dem ("Show Offline
+-- Members" slået fra). 0 rækker = rosteren er ikke indlæst endnu.
+sim_rosterTotal = nil
+sim_showOffline = true
+function GetGuildRosterShowOffline() return sim_showOffline end
+function GetNumGuildMembers()
+    local online = 0
+    for _, m in ipairs(sim_roster) do
+        if m.online then online = online + 1 end
+    end
+    return sim_rosterTotal or #sim_roster, online, online
+end
 function GetGuildRosterInfo(i)
     local m = sim_roster[i]
     if not m then return end
@@ -453,8 +471,48 @@ for q = 0, 5 do ITEM_QUALITY_COLORS[q] = { r = 1, g = 1, b = 1, hex = "|cfffffff
 sim_spellText = {}
 function GetItemIcon(id) return "icon" .. id end
 
+------------------------------------------------------------------------
+-- Klientsprog: sim_me.profs bruger engelske navne, men API'et svarer på klientens sprog.
+-- "deDE" har de rigtige tyske navne. "xxXX" er et opdigtet sprog, som addonen ikke kan have en
+-- færdig tabel for; det viser, at opslaget via spellnavne virker.
+------------------------------------------------------------------------
+
+sim_locale = sim_locale or "enUS"
+function GetLocale() return sim_locale end
+
+local PROF_NAMES = {
+    deDE = { ["Alchemy"] = "Alchemie", ["Blacksmithing"] = "Schmiedekunst", ["Enchanting"] = "Verzauberkunst",
+        ["Engineering"] = "Ingenieurskunst", ["Herbalism"] = "Kräuterkunde", ["Jewelcrafting"] = "Juwelenschleifen",
+        ["Leatherworking"] = "Lederverarbeitung", ["Mining"] = "Bergbau", ["Skinning"] = "Kürschnerei",
+        ["Tailoring"] = "Schneiderei", ["Cooking"] = "Kochkunst", ["First Aid"] = "Erste Hilfe",
+        ["Fishing"] = "Angeln" },
+}
+function sim_profName(name)
+    if sim_locale == "xxXX" then return name .. "~xx" end
+    local names = PROF_NAMES[sim_locale]
+    return names and names[name] or name
+end
+
+-- Professionernes spells (Apprentice). Herbalism har ingen spell med professionens navn: den hedder
+-- "Herb Gathering" (deDE "Kräutersammeln").
+local PROF_SPELLS = { [2259] = "Alchemy", [2018] = "Blacksmithing", [7411] = "Enchanting", [4036] = "Engineering",
+    [25229] = "Jewelcrafting", [2108] = "Leatherworking", [2575] = "Mining", [8613] = "Skinning",
+    [3908] = "Tailoring", [2550] = "Cooking", [3273] = "First Aid", [7620] = "Fishing", [2366] = "Herb Gathering" }
+-- Mainline: skill line-ID pr. profession.
+sim_profIDs = { ["Alchemy"] = 171, ["Blacksmithing"] = 164, ["Enchanting"] = 333, ["Engineering"] = 202,
+    ["Herbalism"] = 182, ["Jewelcrafting"] = 755, ["Leatherworking"] = 165, ["Mining"] = 186, ["Skinning"] = 393,
+    ["Tailoring"] = 197, ["Cooking"] = 185, ["First Aid"] = 129, ["Fishing"] = 356 }
+
+function sim_spellName(id)
+    if sim_spells[id] then return sim_spells[id] end
+    local prof = PROF_SPELLS[id]
+    if not prof then return nil end
+    if prof == "Herb Gathering" then return sim_locale == "deDE" and "Kräutersammeln" or prof end
+    return sim_profName(prof)
+end
+
 sim_spells = {}
-function GetSpellInfo(id) return sim_spells[id] end
+function GetSpellInfo(id) return sim_spellName(id) end
 function GetSpellTexture(id) return "spellicon" .. id end
 function GetSpellLink(id) return sim_spells[id] and ("|Hspell:" .. id .. "|h[" .. sim_spells[id] .. "]|h") end
 
@@ -471,7 +529,7 @@ end
 function GetTradeSkillLine()
     local p = sim_openTrade and ProfByName(sim_openTrade)
     if not p then return "UNKNOWN", 0, 0 end
-    return p.name, p.rank, p.max
+    return sim_profName(p.name), p.rank, p.max
 end
 function GetNumTradeSkills()
     local p = sim_openTrade and ProfByName(sim_openTrade)
@@ -513,7 +571,7 @@ function GetCraftReagentItemLink(i, r) return "|Hitem:" .. CraftReagents(i)[r * 
 function GetCraftDisplaySkillLine()
     local p = sim_openCraft and ProfByName(sim_openCraft)
     if not p then return nil end
-    return p.name, p.rank, p.max
+    return sim_profName(p.name), p.rank, p.max
 end
 function GetNumCrafts()
     local p = sim_openCraft and ProfByName(sim_openCraft)
@@ -525,10 +583,29 @@ function GetCraftItemLink(i)
     return "|Henchant:" .. p.recipes[i] .. "|h[x]|h"
 end
 
-function GetNumSkillLines() return #sim_me.profs end
+-- Skills-listen som i spillet: overskrifter med linjer under. sim_skillsCollapsed lukker
+-- "Professions", så professionerne ikke er med; sim_skillsLoaded = false er lige efter login,
+-- før listen er indlæst.
+sim_skillsCollapsed = false
+sim_skillsLoaded = true
+local function SkillLines()
+    if not sim_skillsLoaded then return {} end
+    local lines = { { name = "Professions", header = true, expanded = not sim_skillsCollapsed } }
+    if not sim_skillsCollapsed then
+        for _, p in ipairs(sim_me.profs) do
+            table.insert(lines, { name = sim_profName(p.name), rank = p.rank, max = p.max })
+        end
+    end
+    table.insert(lines, { name = "Languages", header = true, expanded = true })
+    table.insert(lines, { name = "Common", rank = 300, max = 300 })
+    return lines
+end
+function GetNumSkillLines() return #SkillLines() end
 function GetSkillLineInfo(i)
-    local p = sim_me.profs[i]
-    return p.name, false, false, p.rank, 0, 0, p.max
+    local line = SkillLines()[i]
+    if not line then return end
+    if line.header then return line.name, true, line.expanded, 0, 0, 0, 0 end
+    return line.name, false, false, line.rank, 0, 0, line.max
 end
 
 ------------------------------------------------------------------------
@@ -596,6 +673,11 @@ sim_tooltipPostCalls = {}
 if sim_flavor == "mainline" then
     WOW_PROJECT_ID = 1
     function issecretvalue() return false end
+    -- Midnight-reglernes lockdown-funktioner. I Retail 12.1.0 svarede en af dem true uden for kamp
+    -- (set 2026-10-13), så addonen må ikke lade dem styre noget.
+    sim_lockdown = false
+    C_ChatInfo.InChatMessagingLockdown = function() return sim_lockdown end
+    C_ChatInfo.AreOutgoingAddonChatMessagesRestricted = function() return sim_lockdown end
 
     -- Items og spells
     C_Item = {
@@ -603,7 +685,7 @@ if sim_flavor == "mainline" then
         GetItemIconByID = GetItemIcon, RequestLoadItemDataByID = function() end,
     }
     C_Spell = {
-        GetSpellName = function(id) return sim_spells[id] end,
+        GetSpellName = sim_spellName,
         GetSpellTexture = GetSpellTexture, GetSpellLink = GetSpellLink,
     }
     GetItemInfo, GetItemInfoInstant, GetItemCount, GetItemIcon = nil, nil, nil, nil
@@ -623,7 +705,8 @@ if sim_flavor == "mainline" then
         GetBaseProfessionInfo = function()
             local p = OpenProf()
             if not p then return { professionName = "" } end
-            return { professionName = p.name, skillLevel = p.rank, maxSkillLevel = p.max }
+            return { professionName = sim_profName(p.name), professionID = sim_profIDs[p.name],
+                skillLevel = p.rank, maxSkillLevel = p.max }
         end,
         GetAllRecipeIDs = function()
             local p, ids = OpenProf(), {}
@@ -668,7 +751,7 @@ if sim_flavor == "mainline" then
     end
     function GetProfessionInfo(index)
         local p = sim_me.profs[index]
-        return p.name, "icon", p.rank, p.max
+        return sim_profName(p.name), "icon", p.rank, p.max, 0, 0, sim_profIDs[p.name]
     end
 
     -- Talents: ingen talent-tabs. Rollen kommer fra specialization, hvis spilleren har en.

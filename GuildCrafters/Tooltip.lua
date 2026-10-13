@@ -55,9 +55,23 @@ local function AddHolders(tooltip, itemID)
     return true
 end
 
+-- /gc tooltip off fjerner linjerne fra spillets item-tooltips. I addonens eget vindue er de der
+-- stadig: der er det dem, man kigger efter.
 ns.Compat.HookItemTooltip(function(tooltip, itemID)
     if not ns.db then return end
+    if ns.db.settings.tooltip == false and not ns.UI.Owns(tooltip:GetOwner()) then return end
     local added = AddCrafters(tooltip, itemID)
     added = AddHolders(tooltip, itemID) or added
     if added then tooltip:Show() end
 end)
+
+ns:RegisterCommand("tooltip", function(arg)
+    arg = arg:lower()
+    if arg == "on" or arg == "off" then
+        ns.db.settings.tooltip = arg == "on"
+        ns:Print("Tooltip lines: " .. arg)
+    else
+        ns:Print("\"Crafted by\" and \"Guild has\" on item tooltips are "
+            .. (ns.db.settings.tooltip == false and "off" or "on") .. ns.Plain(". Use /gc tooltip on|off"))
+    end
+end, "/gc tooltip on|off - show \"Crafted by\" and \"Guild has\" on item tooltips")
