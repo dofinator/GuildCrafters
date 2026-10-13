@@ -1,8 +1,10 @@
 # GuildCrafters – SPEC v0.9
 
-> **Status:** v0.14.1 (UX-gennemgang: Crafting som auktionshuset, se §7). Alle faser + Crafting-fane med kategorier, stats-søgning, reagents-sync og Craft List.
-> Testet i simulatoren (`tools/sim`, 59 tjek). Fase 1–2 og UI er også set i TBC Anniversary.
-> Mangler: rigtig test med flere spillere i guilden.
+> **Status:** v0.15.0 (stabilitet: sproguafhængige professioner, automatisk oprydning, pause i kamp, `/gc sync`
+> og statuslinje; se §4, §5 og §7). Alle faser + Crafting-fane med kategorier, stats-søgning, reagents-sync
+> og Craft List.
+> Testet i simulatoren (`tools/sim`, 22 scenarier / ca. 340 tjek, også sammen med udgivne 0.14-klienter).
+> UI og sync er set i TBC Anniversary; det nye i 0.15 er endnu kun set i simulatoren.
 
 En guild-addon, der giver et fælles overblik over **hvem er hvem**, og **hvem kan crafte hvad**.
 Den laves til ca. 10 spillere i samme guild. Der er ingen ekstern server. Al data deles via addon-beskeder
@@ -109,13 +111,52 @@ GuildCraftersDB = {
 - **Nøgler:** Recipes gemmes som *created itemID* (fra `GetTradeSkillItemLink`). Enchants gemmes som
   *spellID* fra `enchant:NNNN`-linket. Navne gemmes aldrig, de resolves lokalt. Dermed er data uafhængige
   af clientens sprog.
-- **Versioner:** Hver char har en tæller pr. datatype. Tælleren bumpes kun, når indholdet faktisk er
-  ændret (sammenlign med forrige scan).
+- **Professionsnøgler (fra v0.15.0):** Nøglen i `profs` er altid det engelske navn ("Alchemy"), uanset
+  klientens sprog (`Compat.ProfessionKey`). Før var det navnet på klientens sprog, så en tysk klient
+  sendte "Alchimie", som de andre hverken havde ikon eller filter til. Det engelske navn er valgt, fordi
+  det så hverken kræver protokolændring eller migrering for enUS-klienter og 0.14.
+  - Mainline: professionens ID (skill line) slås op i en fast tabel.
+  - Classic-klienterne giver kun navne: det omvendte opslag bygges af navnene på professionernes spells
+    på klientens sprog. Herbalism har ingen spell med sit eget navn ("Herb Gathering") og kommer fra en
+    fast tabel over kendte navne på de andre sprog. Tabellen er skrevet efter hukommelsen og ikke
+    tjekket i klienterne; et navn, der ikke kendes, bruges, som det er (som før 0.15).
+  - Egne chars med nøgler på klientens sprog migreres ved login (versionerne bumpes). Navne modtaget
+    fra ikke-engelske 0.14-klienter oversættes, hvis de kendes; det oprindelige navn huskes (`raw`) og
+    bruges, når data sendes videre som relay, så en relay giver det samme som ejeren i samme version.
+  - Kendt hul: enchants deles op efter slot ud fra det engelske spellnavn ("Enchant Bracer - ..."), så
+    på andre sprog havner de under "Other".
+- **Versioner:** Hver char har et tal pr. datatype. Det bumpes kun, når indholdet faktisk er
+  ændret (sammenlign med forrige scan). Fra v0.15.0 er en ny version `max(gammel + 1, servertid)`
+  (`Data.Bump`). Før startede tælleren på 0, så efter en geninstallation, på en ny pc eller i
+  testudgaven sendte man fx recipes v2, mens de andre havde v57 i cachen og aldrig hentede de nye data.
+  For 0.14 er det stadig bare et tal, og gamle små tællere bliver stående, til noget ændrer sig.
+  - Samme char i to sæt gemte data (testudgaven og den udgivne, eller to pc'er): den kopi, der sidst
+    ændrede noget, har den højeste version og vinder hos de andre. Den anden kopi slår først igennem
+    ved sin næste ændring (et scan uden nyt bumper ikke). Ens egne data overskrives aldrig af andres.
 - **Scan er additivt:** Et filtreret vindue eller lukkede kategorier må aldrig fjerne recipes, og
   recipes kan ikke aflæres. Lukkede kategorier foldes ud én gang pr. åbning. Rank opdateres også fra
   Skills-fanen (`SKILL_LINES_CHANGED`).
-- **Kendt hul:** En profession, der er droppet, bliver liggende. Senere kommer `/gc forget <profession>`
-  eller detektion.
+- **Oprydning (fra v0.15.0), kun lokalt:** Der sendes aldrig en sletning. En slette-markør ville
+  kunne slette data hos andre ved en fejl, og 0.14-klienter kender den ikke. 0.14-klienter bliver
+  derfor ved med at vise og annoncere det, en 0.15-klient har ryddet op i; det er forventet.
+  - *Forladt guilden:* Ved hver `GUILD_ROSTER_UPDATE` læses, hvem der står i rosteren. Rosteren regnes
+    kun for **komplet**, når den er indlæst, ens egen char er med, og der kunne læses lige så mange
+    navne, som `GetNumGuildMembers` siger, der er. Er "Show Offline Members" slået fra, kræves der
+    desuden mindst ét offline medlem blandt de læste (det er uvist, om klienten så kun giver
+    online-medlemmerne). Er rosteren ikke komplet, konkluderes der aldrig, at nogen mangler.
+  - Chars, der ikke står i en komplet roster (`Sync:IsGone`), skjules straks i Index (også egne alts,
+    undtagen den aktuelle char), og `INVR`/`DATA`/`REQ` om dem ignoreres.
+  - Første gang fraværet ses med komplet roster, får char'en et tidsstempel (`gone`). 7 dage efter
+    slettes den fra cachen. Der tælles fra første observation og ikke fra "sidst set", så to ugers
+    ferie ikke sletter nogen, der stadig er med. Kommer char'en tilbage inden da (står i rosteren eller
+    sender en `HELLO`), fjernes mærket, og intet er tabt. Egne alts slettes aldrig; de holder bare op
+    med at høre til guilden (`guild = nil`), til de logger ind i den igen.
+  - *Droppet profession:* En profession, der mangler i Skills-listen, flyttes fra `profs` til
+    `dropped` med tidsstempel. Så er den straks ude af alle payloads (de andre ser den forsvinde) og
+    slettes lokalt efter 7 dage. Dukker den op igen (i Skills-listen eller ved at dens vindue åbnes),
+    lægges den tilbage med sine recipes. Det sker kun, når Skills-listen er komplet (Classic: ingen
+    lukkede overskrifter; Mainline: `GetProfessions`), tidligst 8 sek. efter login, og kun for de
+    professioner, addonen kender. `/gc forget <profession>` findes stadig.
 - **Alts:** `myChars` er account-wide, så hver client kender sine egne chars. Kun `main` sendes i `HELLO`, og modtageren udleder alts derfra. `main` sættes med `/gc main <navn>` eller via højreklik i rosteren.
   Standard er den char med højest level. En alt bliver først kendt, når den har været logget ind med addonen.
 
@@ -131,6 +172,17 @@ GuildCraftersDB = {
   tabel (`db.reagents`). Nye reagents bumper `recipes`-versionen, så de når ud.
 - Alle beskeder: `{ p = 2, t = "<type>", ... }`, hvor `p` er protokollens major-version. Version 2 kom
   med reagents i recipes-payloaden. Klienter med `p = 1` ignorerer beskederne og får besked om at opdatere.
+
+**Regler for ændringer af protokollen** (fra v0.15.0; 0.14 er ude hos brugerne og skal kunne snakke med alt nyt)
+- **Bump ikke `Comm.PROTO`** uden en plan for overgangen: en 0.14-klient dropper alle beskeder med
+  `p > 2` og viser kun "A newer version exists".
+- **Læg ikke nye felter i info-payloaden.** En 0.14-klient, der relayer, genopbygger info fra de
+  felter, den kender (`Data:BuildPayload`), og sender den videre under samme versionsnummer. Nye
+  felter forsvinder altså undervejs, og modtageren kan ikke se, at noget mangler.
+- **Nye data pr. char skal i en ny datatype** (`k`). 0.14 ignorerer ukendte typer i `REQ` og en
+  fjerde plads i `INVR`-listerne, så en ny type er usynlig for gamle klienter. (Der er ikke bygget
+  nogen ny type i 0.15; reglen står her til 0.16.)
+- **Ingen slette-markør og ingen ny beskedtype** til oprydning: al oprydning er lokal (se §4).
 
 | Type | Indhold | Hvornår |
 |---|---|---|
@@ -169,6 +221,30 @@ GuildCraftersDB = {
     pr. session.
   - Simuleret med 10–50 % tilfældigt tab, 8 spillere (én blokeret): alle er synkroniseret efter 15 min.
     En times stilstand giver 6 beskeder pr. spiller.
+- **Pause i kamp (fra v0.15.0):** Mens spilleren er i kamp (`InCombatLockdown`; på Mainline også
+  encounter-lockdown, `C_ChatInfo.InChatMessagingLockdown`), sendes og behandles intet. Der pauses
+  i kamp, ikke i hele instances.
+  - *Ud:* Beskeder, der skulle sendes, køes og sendes 1–4 s efter kampen (tilfældigt, fordi hele
+    raidet forlader kampen samtidig). En nyere besked af samme slags erstatter den ældre i køen.
+  - *Ind:* Andres beskeder gemmes som rå tekst og behandles efter kampen, én pr. 0,1 s. En `REQ`
+    droppes aldrig: den, der spørger, giver op efter et par minutter, men får svaret, når kampen er
+    slut. Loft på 1 MB; de ældste, der ikke er `REQ`, ryger først (hjerteslaget retter op).
+  - *Ekkoet* af ens egne guild-beskeder (reserve-transporten) tjekkes med det samme på afsenderen,
+    før noget pakkes ud; ellers ville reserven slå til ved en fejl efter en lang kamp.
+  - Lokalt: indekset genopbygges ikke i kamp (det forældede bruges), og det åbne vindue opdateres
+    ikke af sig selv, men lige efter kampen. Det, man selv klikker på, virker som normalt.
+  - Baggrund: belastningstesten (`tools/sim/loadtest.py`, 600 medlemmer). Med 200 addon-brugere var
+    en opdatering af Crafting-fanen det eneste, der nåede ca. 200 ms; en stor `DATA` koster 2–8 ms at
+    pakke ud, alt andet under 1 ms.
+- **Hjerteslag uden ændringer** (samme info-version, addon-version og main) gemmes ikke igen og
+  udløser ingen opdatering af indeks eller vindue (fra v0.15.0).
+- **Manuel sync (fra v0.15.0):** `/gc sync` sender en `HELLO` med `q` med det samme, dog højst hvert
+  10. sekund, og ikke i kamp. Efter 20 s står resultatet i chatten ("Sync done: 7 online with the
+  addon, 3 updates.").
+- **Kendt svaghed (målt, ikke rettet):** En `DATA` eller `INVR` over ca. 4 KB kan ikke nå frem inden
+  for de 2–8 sekunders forsinkelse, som de andre relays venter, før de selv svarer. I en guild med
+  mange addon-brugere svarer flere relays derfor med hver sin kopi. Det koster båndbredde, ikke
+  korrekthed, og kræver en ændring af protokollen (fx et lille "jeg svarer" først).
 - **Versionstolerance:** Ukendte felter ignoreres. Hvis `p` er større end vores egen version, ignoreres
   beskeden, og brugeren ser én gang beskeden "Der findes en nyere version af GuildCrafters".
 - **Validering:** Typer og størrelser tjekkes (højst 2000 ID'er pr. liste), og forkert formateret data
@@ -194,7 +270,15 @@ med spillets egne knapper, skrifttyper og scrollbars. Der er ingen egen grafik.
 - Fanerne har samme bredde.
 - Afstanden afhænger af templaten: `PanelTabButtonTemplate` har +3, mens den gamle
   `CharacterFrameTabButtonTemplate` overlapper med -16.
-- Hver fane har en statuslinje nederst med antal, "Not in a guild" og lignende.
+- Hver fane har en fodlinje nederst med antal, "Not in a guild" og lignende.
+- **Statuslinje (fra v0.15.0, valgt af brugeren ud fra tre mockups):** Til højre i fodlinjen, på alle
+  faner, står altid én kort tekst: "Synced 2 min ago · 7 with addon" (hvornår vi sidst hørte fra en
+  anden med addonen, og hvor mange af dem der er online). Den skifter kun, når der sker noget:
+  "Syncing...", "Sync paused (in combat)", "Sending directly (guild channel blocked)", "Nobody else
+  online with the addon" og "Not synced yet · N with addon". Tooltippen har resten: "Last update: 2 min
+  ago (from Anna)", "7 online with GuildCrafters, 23 known" og "Type /gc sync to ask the guild now".
+  Fodlinjens egen tekst må derfor kun fylde den venstre del; Craft Lists forklaring og Mats-fanens
+  tekst blev forkortet af samme grund.
 
 **Opførsel:**
 - Vinduet kan flyttes, og positionen huskes.
@@ -322,8 +406,10 @@ layoutet ud fra mockups: én linje pr. recipe, filterlinje med "Usable items" og
 ## 8. Tooltip
 
 - `Compat.HookItemTooltip` bruger `TooltipDataProcessor`, hvis det findes, og ellers
-  `OnTooltipSetItem`. Den tilføjer "Crafted by: X, Y (+n)" på craftede items. Online-navne står i
-  grøn og offline-navne i grå.
+  `OnTooltipSetItem`. Den tilføjer "Crafted by: X, Y (+n)" på craftede items (højst fire navne).
+  Online-navne står i grøn og offline-navne i grå.
+- `/gc tooltip on|off` (fra v0.15.0, gemt i `settings.tooltip`) slår linjerne fra på spillets
+  item-tooltips. I addonens eget vindue vises de stadig.
 - På mats vises "Guild has: X 40, Guild bank 200" ud fra delte mats, ens alts og guild bank. Den char,
   man selv spiller, er ikke med (det står allerede i taskerne).
 - **Kendt begrænsning:** Recipe-, pattern- og formula-items kan ikke mappes til deres produkt via API'et.
@@ -380,6 +466,13 @@ layoutet ud fra mockups: én linje pr. recipe, filterlinje med "Usable items" og
   - klient uden guild
   - fremmede eller ødelagte beskeder
   - login-storm med 10 spillere
+  - fra v0.15.0: udgivne 0.14-klienter i samme guild (kilden hentes med git fra tagget `v0.14.0`),
+    gemte data i 0.14-format, tysk og ukendt klientsprog, tomme gemte data over for høje versioner,
+    oprydning (forladt medlem med en 0.14-klient, der bliver ved med at relaye; login før rosteren er
+    indlæst; roster kun med online-medlemmer; lukket overskrift i Skills; to ugers pause), kamp og
+    encounter-lockdown, `/gc tooltip`, `/gc sync` og statuslinjen
+  - `python tools/sim/loadtest.py` måler én klient i en guild med 600 medlemmer (10 eller 200 med
+    addonen): roster, søgning, tooltip, store payloads og login. Kører ikke i CI.
   
   Kør den efter hver ændring i sync-logikken.
 - `/console scriptErrors 1` er slået til under udvikling.
