@@ -3,7 +3,7 @@
 > **Status:** v0.15.0 (stabilitet: sproguafhængige professioner, automatisk oprydning, pause i kamp, `/gc sync`
 > og statuslinje; se §4, §5 og §7). Alle faser + Crafting-fane med kategorier, stats-søgning, reagents-sync
 > og Craft List.
-> Testet i simulatoren (`tools/sim`, 22 scenarier / ca. 340 tjek, også sammen med udgivne 0.14-klienter).
+> Testet i simulatoren (`tools/sim`, 23 scenarier / ca. 365 tjek, også sammen med udgivne 0.14-klienter).
 > UI og sync er set i TBC Anniversary; det nye i 0.15 er endnu kun set i simulatoren.
 
 En guild-addon, der giver et fælles overblik over **hvem er hvem**, og **hvem kan crafte hvad**.
@@ -133,6 +133,11 @@ GuildCraftersDB = {
   - Samme char i to sæt gemte data (testudgaven og den udgivne, eller to pc'er): den kopi, der sidst
     ændrede noget, har den højeste version og vinder hos de andre. Den anden kopi slår først igennem
     ved sin næste ændring (et scan uden nyt bumper ikke). Ens egne data overskrives aldrig af andres.
+    Konsekvens: har den ene kopi færre data (fx testudgaven, hvor kun én profession har været åbnet),
+    viser de andre den kopis data, også efter at man er tilbage på den anden, indtil den ændrer noget
+    (ny recipe, eller `/gc forget <profession>` og åbn vinduet igen). Åbn derfor alle professions i
+    testudgaven, før den bruges på en rigtig guild-char. En rettelse (ejerens egen `HELLO` vinder
+    uanset versionens størrelse) kræver, at modtagerne er på 0.15, og er ikke bygget.
 - **Scan er additivt:** Et filtreret vindue eller lukkede kategorier må aldrig fjerne recipes, og
   recipes kan ikke aflæres. Lukkede kategorier foldes ud én gang pr. åbning. Rank opdateres også fra
   Skills-fanen (`SKILL_LINES_CHANGED`).
@@ -144,6 +149,11 @@ GuildCraftersDB = {
     navne, som `GetNumGuildMembers` siger, der er. Er "Show Offline Members" slået fra, kræves der
     desuden mindst ét offline medlem blandt de læste (det er uvist, om klienten så kun giver
     online-medlemmerne). Er rosteren ikke komplet, konkluderes der aldrig, at nogen mangler.
+  - Sikringer, fordi sletning ikke kan fortrydes, og rosterens opførsel ikke er set i alle klienter:
+    mangler over halvdelen af mindst fem kendte chars på én gang, regnes rosteren for ufuldstændig;
+    en char, der har sendt en `HELLO` inden for de sidste 15 minutter, er med, uanset hvad rosteren
+    siger (et nyt medlem, før klientens kopi af rosteren er opdateret); og der ryddes tidligst op
+    60 sek. efter login.
   - Chars, der ikke står i en komplet roster (`Sync:IsGone`), skjules straks i Index (også egne alts,
     undtagen den aktuelle char), og `INVR`/`DATA`/`REQ` om dem ignoreres.
   - Første gang fraværet ses med komplet roster, får char'en et tidsstempel (`gone`). 7 dage efter
@@ -231,6 +241,10 @@ GuildCraftersDB = {
     slut. Loft på 1 MB; de ældste, der ikke er `REQ`, ryger først (hjerteslaget retter op).
   - *Ekkoet* af ens egne guild-beskeder (reserve-transporten) tjekkes med det samme på afsenderen,
     før noget pakkes ud; ellers ville reserven slå til ved en fejl efter en lang kamp.
+  - *Rækkefølge:* Så længe en af køerne ikke er tom, går også nye beskeder gennem køen, både ud og
+    ind. Ellers blev en nyere besked sendt eller behandlet før en ældre fra kampen, og den ældre
+    (forældet rolle, level eller professions) vandt hos modtagerne. En fejl i én gemt besked stopper
+    ikke resten af køen.
   - Lokalt: indekset genopbygges ikke i kamp (det forældede bruges), og det åbne vindue opdateres
     ikke af sig selv, men lige efter kampen. Det, man selv klikker på, virker som normalt.
   - Baggrund: belastningstesten (`tools/sim/loadtest.py`, 600 medlemmer). Med 200 addon-brugere var
@@ -238,6 +252,9 @@ GuildCraftersDB = {
     pakke ud, alt andet under 1 ms.
 - **Hjerteslag uden ændringer** (samme info-version, addon-version og main) gemmes ikke igen og
   udløser ingen opdatering af indeks eller vindue (fra v0.15.0).
+- **Info uden en profession, der havde recipes** (fra v0.15.0): recipes-versionen for den char
+  nulstilles, så recipes hentes igen. Før stod professionen tom, hvis den kom tilbage i en senere
+  info, indtil ejeren lærte noget nyt.
 - **Manuel sync (fra v0.15.0):** `/gc sync` sender en `HELLO` med `q` med det samme, dog højst hvert
   10. sekund, og ikke i kamp. Efter 20 s står resultatet i chatten ("Sync done: 7 online with the
   addon, 3 updates.").
@@ -470,7 +487,8 @@ layoutet ud fra mockups: én linje pr. recipe, filterlinje med "Usable items" og
     gemte data i 0.14-format, tysk og ukendt klientsprog, tomme gemte data over for høje versioner,
     oprydning (forladt medlem med en 0.14-klient, der bliver ved med at relaye; login før rosteren er
     indlæst; roster kun med online-medlemmer; lukket overskrift i Skills; to ugers pause), kamp og
-    encounter-lockdown, `/gc tooltip`, `/gc sync` og statuslinjen
+    encounter-lockdown (også rækkefølgen af beskeder lige efter kampen), `/gc tooltip`, `/gc sync`,
+    statuslinjen og sikringerne omkring oprydning (scenarie 23)
   - `python tools/sim/loadtest.py` måler én klient i en guild med 600 medlemmer (10 eller 200 med
     addonen): roster, søgning, tooltip, store payloads og login. Kører ikke i CI.
   

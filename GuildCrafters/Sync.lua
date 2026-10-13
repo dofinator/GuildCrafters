@@ -27,12 +27,22 @@ local busyUntil = 0          -- GetTime(): indtil da viser statuslinjen "Syncing
 local manual                 -- { updates = antal } mens et /gc sync venter på svar
 
 local SWEEP_INTERVAL = 300   -- sekunder mellem oprydninger i cachen (Data:SweepGone)
+local SWEEP_DELAY = 60       -- første oprydning tidligst så længe efter login (rosteren skal falde til ro)
+local GUARD_MIN = 5          -- med mindst så mange kendte chars må højst halvdelen mangle i rosteren
+local HEARD_TTL = 900        -- så længe efter en HELLO regnes afsenderen for medlem, uanset rosteren
+                             -- (længere end hjerteslaget, så en, der er online med addonen, altid er med)
 
 local online = {}            -- [key] = true for online guildmedlemmer
 local members = {}           -- [key] = true for alle i guild-rosteren, som den sidst blev læst
 local rosterComplete = false -- viste rosteren hele guilden? Kun da siger "ikke i members" noget
 local hidden = {}            -- [key] = true: kendte chars, der lige nu regnes for at have forladt guilden
-local lastSweep
+local heard = {}             -- [key] = GetTime() for seneste HELLO: afsenderen er med i guilden
+local lastSweep, sweepFrom
+
+local function Heard(key)
+    local at = heard[key]
+    return at ~= nil and GetTime() - at < HEARD_TTL
+end
 local reqSeen = {}           -- [key|kind] = GetTime() for sendt/set REQ
 local wanted = {}            -- [key|kind] = { v = version vi mangler, tries = antal genforsøg }
 local dataPlanned = {}       -- [key|kind] = { v = version, cancelled = bool }
@@ -64,11 +74,23 @@ local function RefreshOnline()
     local guild, guildKey = ns.Data:GetGuild()
     local now, changed = {}, false
     if rosterComplete and guild then
+        local known, missing = 0, 0
         for key in pairs(guild.chars) do
-            if not members[key] then now[key] = true end
+            known = known + 1
+            if not members[key] and not Heard(key) then
+                now[key] = true
+                missing = missing + 1
+            end
         end
-        for key, rec in pairs(ns.db.myChars) do
-            if rec.guild == guildKey and not members[key] then now[key] = true end
+        -- Sikring: mangler over halvdelen af dem, vi kender, på én gang, er det mere sandsynligt, at
+        -- rosteren er forkert (klienten viste kun nogle af medlemmerne), end at de alle er gået.
+        -- Sletning kan ikke fortrydes, så i det tilfælde konkluderes der intet.
+        if known >= GUARD_MIN and missing * 2 > known then
+            rosterComplete, now = false, {}
+        else
+            for key, rec in pairs(ns.db.myChars) do
+                if rec.guild == guildKey and not members[key] then now[key] = true end
+            end
         end
     end
     for key in pairs(now) do
@@ -79,9 +101,12 @@ local function RefreshOnline()
     end
     hidden = now
     if changed then ns.Index:MarkDirty() end
-    if rosterComplete and (not lastSweep or GetTime() - lastSweep >= SWEEP_INTERVAL) then
+    -- Oprydningen (mærker og sletning) kører med mellemrum, og straks når gruppen ændrer sig, så et
+    -- mærke sat ud fra en forkert roster er væk igen, så snart den rigtige kommer.
+    if rosterComplete and sweepFrom and GetTime() >= sweepFrom
+        and (changed or not lastSweep or GetTime() - lastSweep >= SWEEP_INTERVAL) then
         lastSweep = GetTime()
-        ns.Data:SweepGone(function(key) return members[key] == true end)
+        ns.Data:SweepGone(function(key) return members[key] == true or Heard(key) end)
     end
 end
 
@@ -93,7 +118,7 @@ end
 -- om den ignoreres; 0.14-klienter, der stadig har den i cachen, bliver ved med at annoncere den.
 -- Er rosteren ikke komplet, er svaret altid nej.
 function Sync:IsGone(key)
-    return rosterComplete and not members[key]
+    return rosterComplete and not members[key] and not Heard(key)
 end
 
 function Sync:RosterComplete()
@@ -229,6 +254,10 @@ local function WatchWanted(key, kind, w)
     local id = Id(key, kind)
     C_Timer.After(REQ_TIMEOUT + Rand(1, 6), function()
         if wanted[id] ~= w then return end      -- data er kommet (og måske et nyt ønske siden)
+        if ns.Comm.paused then                  -- i kamp sendes intet: forsøgene skal ikke bruges op
+            WatchWanted(key, kind, w)
+            return
+        end
         if ns.Data:HeldVersion(key, kind) >= w.v or w.tries >= MAX_REQ_TRIES then
             wanted[id] = nil
             ns:Fire("SYNC_STATUS")
@@ -460,14 +489,16 @@ ns.Comm:Handle("HELLO", function(sender, msg)
     if ns.Data:IsMine(sender) then return end
     if not Valid("info", msg) or type(msg.v) ~= "table" then return end
 
-    -- En, der sender til guilden, er med i den, også hvis rosteren ikke har nået at vise det endnu.
-    if not members[sender] then
-        members[sender] = true
+    -- En, der sender til guilden, er med i den, også hvis rosteren ikke viser det (et nyt medlem,
+    -- før klientens kopi af rosteren er opdateret). Det gælder i HEARD_TTL sekunder.
+    local wasHeard = Heard(sender)
+    heard[sender] = GetTime()
+    if not wasHeard then
         if hidden[sender] then
             hidden[sender] = nil
             ns.Index:MarkDirty()
         end
-        if rosterComplete then ns.Compat.RequestGuildRoster() end
+        if rosterComplete and not members[sender] then ns.Compat.RequestGuildRoster() end
     end
     local wasOnline = online[sender]
     online[sender] = true
@@ -518,6 +549,8 @@ local function TryStart()
     started = true
     ns.Data:GetMe().guild = guildKey
     ns.Index:MarkDirty()        -- ens egen char hører nu til guilden
+    sweepFrom = GetTime() + SWEEP_DELAY
+    C_Timer.After(SWEEP_DELAY + 1, RefreshOnline)
     RefreshOnline()
     busyUntil = GetTime() + 30
     Sync:QueueHello(Rand(5, 15), true)

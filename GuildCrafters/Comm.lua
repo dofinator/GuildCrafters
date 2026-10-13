@@ -158,8 +158,8 @@ end
 ------------------------------------------------------------------------
 
 local MAX_IN_BYTES = 1000000    -- loft over gemte indgående beskeder; de ældste, der ikke er REQ, ryger først
-local IN_PER_STEP = 1           -- så mange gemte beskeder behandles pr. 0,1 s efter kampen (en stor DATA
-                                -- koster 2-8 ms at pakke ud, målt i tools/sim/loadtest.py)
+local DRAIN_STEP = 0.1          -- sekunder mellem to gemte beskeder efter kampen (en stor DATA koster
+                                -- 2-8 ms at pakke ud, målt i tools/sim/loadtest.py)
 local RESUME_CHECK = 3          -- sekunder mellem tjek af, om kampen er slut (reserve for eventet)
 
 Comm.paused = false
@@ -189,22 +189,17 @@ local function IsPaused()
     return Comm.paused
 end
 
+-- Én gemt besked ad gangen. Næste trin planlægges, før beskeden behandles, og en fejl i en besked må
+-- ikke stoppe resten: ellers blev alt, der blev gemt i denne og senere kampe, aldrig behandlet.
 local function Drain()
-    if Comm.paused then
+    local entry = not Comm.paused and table.remove(inQueue, 1)
+    if not entry then
         draining = false
         return
     end
-    for _ = 1, IN_PER_STEP do
-        local entry = table.remove(inQueue, 1)
-        if not entry then break end
-        inBytes = inBytes - #entry.text
-        Receive(entry.text, entry.distribution, entry.sender)
-    end
-    if #inQueue > 0 then
-        C_Timer.After(0.1, Drain)
-    else
-        draining = false
-    end
+    inBytes = inBytes - #entry.text
+    C_Timer.After(DRAIN_STEP, Drain)
+    xpcall(Receive, geterrorhandler(), entry.text, entry.distribution, entry.sender)
 end
 
 function Comm.Resume()
@@ -213,7 +208,7 @@ function Comm.Resume()
     ns:Fire("SYNC_STATUS")
     if #inQueue > 0 and not draining then
         draining = true
-        C_Timer.After(0.1, Drain)
+        C_Timer.After(DRAIN_STEP, Drain)
     end
     if #outQueue > 0 then
         C_Timer.After(1 + math.random() * 3, function()
@@ -264,7 +259,9 @@ end
 
 -- prio: "ALERT", "NORMAL" eller "BULK" (ChatThrottleLib).
 function Comm:Send(msg, distribution, target, prio)
-    if IsPaused() then
+    -- Også lige efter kampen, mens køen venter på at blive sendt: ellers gik en ny HELLO ud før den
+    -- gamle i køen, og den gamle (forældet rolle, level, professions) vandt hos alle modtagere.
+    if IsPaused() or #outQueue > 0 then
         QueueOut(msg, distribution, target, prio)
         return
     end
@@ -307,13 +304,19 @@ end
 function Comm:OnCommReceived(prefix, text, distribution, sender)
     if IsSecret(prefix, text, sender) then return end
     if prefix ~= Comm.PREFIX then return end
-    if IsPaused() then
+    -- Også mens køen tømmes efter kampen: nye beskeder skal bagest i køen, ellers blev en ældre
+    -- besked fra samme afsender behandlet efter den nye og vandt.
+    if IsPaused() or draining or #inQueue > 0 then
         -- Afsenderen tjekkes, før noget pakkes ud: vores eget ekko må ikke vente (se WatchEcho),
         -- og resten skal ikke koste noget i kamp.
         if ns.Compat.FullName(sender) == ns.Compat.PlayerKey() then
             if distribution == "GUILD" then GuildEchoSeen() end
         else
             QueueIn(text, distribution, sender)
+            if not Comm.paused and not draining then
+                draining = true
+                C_Timer.After(DRAIN_STEP, Drain)
+            end
         end
         return
     end

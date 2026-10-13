@@ -296,13 +296,18 @@ ns:On("ROSTER_CHANGED", function() UI:RequestRefresh() end)
 ns:On("INDEX_CHANGED", function() UI:RequestRefresh() end)
 ns:On("ITEM_NAMES", function() UI:RequestRefresh() end)
 ns:On("CRAFTLIST_CHANGED", function() UI:RequestRefresh() end)
-ns:On("SYNC_STATUS", function() UI.UpdateStatus() end)
-ns:RegisterEvent("PLAYER_REGEN_ENABLED", function()
-    if refreshAfterCombat then
+local function RefreshAfterCombat()
+    if refreshAfterCombat and not ns.Compat.InCombat() then
         refreshAfterCombat = false
         UI:RequestRefresh()
     end
+end
+-- SYNC_STATUS kommer også, når pausen slutter uden et kamp-event (encounter-lockdown på Mainline).
+ns:On("SYNC_STATUS", function()
+    UI.UpdateStatus()
+    RefreshAfterCombat()
 end)
+ns:RegisterEvent("PLAYER_REGEN_ENABLED", RefreshAfterCombat)
 
 -- Fodlinje nederst i en fane (antal, "Not in a guild" osv.). Den højre del af linjen tilhører
 -- statuslinjen (CreateStatus), så teksten her må ikke brede sig derind.

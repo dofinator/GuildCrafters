@@ -481,7 +481,7 @@ sim_locale = sim_locale or "enUS"
 function GetLocale() return sim_locale end
 
 local PROF_NAMES = {
-    deDE = { ["Alchemy"] = "Alchimie", ["Blacksmithing"] = "Schmiedekunst", ["Enchanting"] = "Verzauberkunst",
+    deDE = { ["Alchemy"] = "Alchemie", ["Blacksmithing"] = "Schmiedekunst", ["Enchanting"] = "Verzauberkunst",
         ["Engineering"] = "Ingenieurskunst", ["Herbalism"] = "Kräuterkunde", ["Jewelcrafting"] = "Juwelenschleifen",
         ["Leatherworking"] = "Lederverarbeitung", ["Mining"] = "Bergbau", ["Skinning"] = "Kürschnerei",
         ["Tailoring"] = "Schneiderei", ["Cooking"] = "Kochkunst", ["First Aid"] = "Erste Hilfe",

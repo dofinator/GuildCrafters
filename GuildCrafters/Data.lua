@@ -506,11 +506,29 @@ function Data:ApplyPayload(key, kind, version, d)
             prof.raw = key ~= name and name or nil
             profs[key] = prof
         end
+        -- Forsvinder en profession med recipes, er vores recipes ikke længere det, ejeren har: glem
+        -- versionen, så de hentes igen. (Kommer professionen tilbage i en senere info, ville den
+        -- ellers stå tom, indtil ejeren lærte noget nyt.)
+        for key, prof in pairs(c.profs) do
+            if not profs[key] and (next(prof.items or {}) or next(prof.enchants or {})) then
+                c.dataV.recipes = 0
+            end
+        end
         c.profs = profs
     elseif kind == "recipes" then
         local sent, raw = {}, {}
         for name, r in pairs(d.p) do
             local key = ns.Compat.ProfessionKey(name)
+            local same = sent[key]
+            if same then
+                -- To navne for samme profession (ejeren har skiftet klientsprog): læg dem sammen.
+                local merged = { i = {}, e = {} }
+                for _, part in ipairs({ same, r }) do
+                    for _, id in ipairs(part.i or {}) do table.insert(merged.i, id) end
+                    for _, id in ipairs(part.e or {}) do table.insert(merged.e, id) end
+                end
+                r = merged
+            end
             sent[key] = r
             if key ~= name then raw[key] = name end
         end
@@ -620,6 +638,7 @@ ns:RegisterCommand("forget", function(arg)
     for name in pairs(me.dropped or {}) do
         if arg ~= "" and (name:lower() == arg:lower() or name:lower() == wanted) then
             me.dropped[name] = nil      -- allerede skjult for guilden; nu også væk herfra
+            if not next(me.dropped) then me.dropped = nil end
             ns:Print(name .. " removed from your data.")
             return
         end

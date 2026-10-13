@@ -167,6 +167,7 @@ class Client:
         # Hvad guild-rosteren viser: "full", "empty" (ikke indlæst endnu), "online" (kun online-rækker,
         # men det samlede antal er rigtigt) eller "online_total" (også antallet tæller kun online).
         self.roster_mode = "full"
+        self.roster_skip = set()        # navne, klientens kopi af rosteren (endnu) ikke har med
         self.flavor = flavor            # "classic" (TBC Anniversary) eller "mainline" (retail / WoW Forever)
         self.addon = addon              # mappenavnet: "GuildCrafters" eller testudgaven "GuildCraftersTest"
         self.name = name
@@ -245,6 +246,7 @@ class Client:
             for name, level, cls, online in self.world.ghosts:
                 rows.append(L.table_from({"name": f"{name}-{REALM}", "level": level, "class": cls,
                                           "online": online}))
+        rows = [r for r in rows if r.name.split("-")[0] not in self.roster_skip]
         total = len(rows)
         if self.roster_mode == "empty":
             rows, total = [], 0
@@ -1574,7 +1576,7 @@ def scenario_locale():
     amy = _player(w, "Amy", [TAIL])
     _join(w, karl, 2)
     _join(w, amy, 120)
-    check(_my_profs(karl) == ["Alchimie", "Kräuterkunde"], f"0.14 på tysk gemmer tyske navne ({_my_profs(karl)})")
+    check(_my_profs(karl) == ["Alchemie", "Kräuterkunde"], f"0.14 på tysk gemmer tyske navne ({_my_profs(karl)})")
     seen = _cache_profs(amy, karl.key)
     check(seen == {"Alchemy": 300, "Herbalism": 150} and _knows(amy, karl),
           f"0.15 oversætter modtagne tyske navne og har recipes under dem ({seen})")
@@ -1583,7 +1585,7 @@ def scenario_locale():
     olaf = _player(w, "Olaf", [ENCH], source=OLD)
     _join(w, olaf, 120)
     seen = _cache_profs(olaf, karl.key)
-    check(seen == {"Alchimie": 300, "Kräuterkunde": 150} and _knows(olaf, karl),
+    check(seen == {"Alchemie": 300, "Kräuterkunde": 150} and _knows(olaf, karl),
           f"Relay fra 0.15 giver ejerens egne navne videre til en 0.14-klient ({seen})")
 
     # Karl opdaterer til 0.15: hans egne nøgler migreres, og de andre får de engelske navne.
@@ -1667,11 +1669,13 @@ def scenario_cleanup():
     _leave(w, zed)
     _leave(w, yan)
     w.step(5)
-    check(ny.ns.Sync.IsGone(ny.ns.Sync, zed.key) and "Zed" not in _crafters(ny, "e", 7418),
-          "Zed står ikke i rosteren: skjult med det samme")
-    check(ny.cache(zed.key) is not None, "... men data slettes ikke endnu")
-    w.step(300)
+    check(not ny.ns.Sync.IsGone(ny.ns.Sync, zed.key) and "Zed" in _crafters(ny, "e", 7418),
+          "Zed sendte en HELLO for lidt siden: han regnes stadig for medlem (rosteren kan være bagud)")
+    w.step(1000)
     w.push_roster()
+    check(ny.ns.Sync.IsGone(ny.ns.Sync, zed.key) and "Zed" not in _crafters(ny, "e", 7418),
+          "Et kvarter efter hans sidste HELLO, og stadig ikke i rosteren: skjult")
+    check(ny.cache(zed.key) is not None, "... men data slettes ikke endnu")
     first = gone_mark(ny, zed.key)
     check(first is not None, "Fraværet får et tidsstempel første gang, det ses med komplet roster")
 
@@ -1734,7 +1738,7 @@ def scenario_cleanup():
     for x in (a, b, c):
         x.logout()
     _leave(w, b)
-    w.step(300)
+    w.step(1000)
     w.push_roster()
     check(gone_mark(ny, b.key) is not None, "Birk er mærket før pausen")
     saved = ny.logout()
@@ -1742,6 +1746,8 @@ def scenario_cleanup():
     c.guild = None
     ny = _rejoin(w, ny, saved=saved)
     _join(w, ny, 30)
+    check(ny.cache(b.key) is not None, "Lige efter login ryddes der ikke op (rosteren skal falde til ro)")
+    w.step(40)
     check(ny.cache(a.key) is not None and gone_mark(ny, a.key) is None and "Aase" in _crafters(ny, "i", 13510),
           "To ugers pause: et medlem, der stadig er med, røres ikke (selvom det er længe siden, det blev set)")
     check(ny.cache(b.key) is None, "Den, der var mærket før pausen, er slettet ved login")
@@ -1840,6 +1846,49 @@ def scenario_combat():
     check(not ejer.ns.Comm.guildBlocked and ejer.ns.Sync.StatusText(ejer.ns.Sync) != "Sync paused (in combat)",
           "Pausen er slut, og reserve-transporten er stadig slået fra")
     lua_errors(ejer, ven, cara)
+
+    # Rækkefølgen efter kampen. En HELLO, der blev køet i kampen, må ikke gå ud EFTER en nyere: alle
+    # modtagere gemmer den seneste HELLO, de hører, så den forældede ville vinde.
+    ejer.combat(True)
+    ejer.slash("role tank")
+    w.step(12)                                      # HELLO med TANK ligger nu i køen
+    ejer.db.myChars[ejer.key].roleOverride = "HEALER"   # ændret igen (uden at planlægge endnu en HELLO)
+    ejer.combat(False)
+    ejer.ns.Sync.SendHello(ejer.ns.Sync, False)     # en ny HELLO lige efter kampen, før køen er sendt
+    w.step(8)
+    roles = (ven.cache(ejer.key).role, cara.cache(ejer.key).role)
+    check(roles == ("HEALER", "HEALER"), f"Efter kampen vinder den nyeste HELLO, ikke den fra køen ({roles})")
+    w.step(15)
+
+    # Det samme den anden vej: mens de gemte beskeder behandles (én pr. 0,1 s), skal nye bag i køen.
+    ejer.combat(True)
+    ser = ejer.L.eval('(LibStub("AceSerializer-3.0"))')
+    for i in range(150):
+        text = ser.Serialize(ser, ejer.L.table_from({"t": "INVR", "p": 2, "l": ejer.L.table(), "x": i}))
+        ejer.g.sim_deliver("GCRAFT", text, "GUILD", ven.key)
+    ven.slash("role tank")
+    w.step(15)                                      # vennens HELLO med TANK ligger sidst i køen
+    ven.slash("role dps")
+    ejer.combat(False)
+    ven.ns.Sync.SendHello(ven.ns.Sync, False)       # hans nye HELLO kommer, mens køen tømmes
+    w.step(40)
+    check(ejer.cache(ven.key).role == "DPS",
+          f"Beskeder modtaget, mens køen tømmes, behandles efter de gemte ({ejer.cache(ven.key).role})")
+    lua_errors(ejer, ven, cara)
+
+    # En fejl i én gemt besked må ikke stoppe resten af køen (hverken nu eller i næste kamp).
+    ejer.L.eval("function(ns) ns.Comm:Handle('BOOM', function() error('boom') end) end")(ejer.ns)
+    for role in ("healer", "tank"):
+        ejer.combat(True)
+        ejer.g.sim_deliver("GCRAFT", ser.Serialize(ser, ejer.L.table_from({"t": "BOOM", "p": 2})), "GUILD", ven.key)
+        ven.slash("role " + role)
+        w.step(15)
+        ejer.combat(False)
+        w.step(10)
+    errs = [e for _, e in ejer.g.sim_errors.items()]
+    check(len(errs) == 2 and all("boom" in e for e in errs) and ejer.cache(ven.key).role == "TANK",
+          f"En fejl i en gemt besked stopper ikke køen ({len(errs)} fejl, rolle {ejer.cache(ven.key).role})")
+    ejer.L.execute("sim_errors = {}")
 
     # Åbent vindue: det opdateres ikke af sig selv i kamp, men lige efter.
     ejer.slash("")
@@ -1982,6 +2031,100 @@ def scenario_status():
     lua_errors(solo)
 
 
+def scenario_review():
+    print("\nScenarie 23: sikringer fundet i review af 0.15")
+    herb = {"name": "Herbalism", "rank": 150, "max": 225, "recipes": []}
+
+    # Alene online, og rosteren tæller kun online-medlemmer: det er ikke en komplet roster.
+    w = World()
+    ny = _player(w, "Ny", [TAIL])
+    aase = _player(w, "Aase", [ALCH], source=OLD)
+    _join(w, ny, 2)
+    _join(w, aase, 90)
+    saved = ny.logout()
+    aase.logout()
+    w.epoch += 8 * DAY
+    for _ in range(2):                              # to logins med 8 dage imellem: intet må slettes
+        ny = _rejoin(w, ny, saved=saved)
+        ny.roster_mode = "online_total"
+        _join(w, ny, 400)
+        w.push_roster()
+        c = ny.cache(aase.key)
+        check(not ny.ns.Sync.RosterComplete(ny.ns.Sync) and c is not None and c.gone is None
+              and "Aase" in _crafters(ny, "i", 13510), "Alene online i en roster, der kun tæller online: ingen skjules eller mærkes")
+        saved = ny.logout()
+        w.epoch += 8 * DAY
+    lua_errors(ny)
+
+    # Mangler over halvdelen af dem, vi kender, på én gang, er det rosteren, der er noget galt med.
+    w = World()
+    ny = _player(w, "Ny", [TAIL])
+    others = [_player(w, n, [ALCH], source=OLD) for n in ("Ask", "Bo", "Cai", "Dan", "Eli")]
+    _join(w, ny, 2)
+    for o in others:
+        _join(w, o, 2)
+    w.step(120)
+    for o in others[:3]:
+        _leave(w, o)
+    w.step(1000)
+    w.push_roster()
+    check(not ny.ns.Sync.RosterComplete(ny.ns.Sync) and ny.cache(others[0].key).gone is None
+          and "Ask" in _crafters(ny, "i", 13510), "3 af 5 kendte mangler på én gang: der konkluderes intet")
+    others[2].guild = GUILD                         # én af dem er der alligevel: nu mangler 2 af 5
+    w.push_roster()
+    check(ny.ns.Sync.RosterComplete(ny.ns.Sync) and "Ask" not in _crafters(ny, "i", 13510)
+          and "Cai" in _crafters(ny, "i", 13510), "2 af 5 mangler: de to skjules som normalt")
+    lua_errors(ny)
+
+    # Nyt medlem, som klientens kopi af rosteren ikke har med endnu: hun sender på guild-kanalen, så
+    # hun er med, og hendes data skal ikke afvises.
+    w = World()
+    ny = _player(w, "Ny", [TAIL])
+    bo = _player(w, "Bo", [ENCH], source=OLD)
+    _join(w, ny, 2)
+    _join(w, bo, 60)
+    ny.roster_skip = {"Kim"}
+    kim = _player(w, "Kim", [ALCH])
+    _join(w, kim, 120)
+    check(ny.ns.Sync.RosterComplete(ny.ns.Sync) and _knows(ny, kim) and "Kim" in _crafters(ny, "i", 13510),
+          "Nyt medlem, der mangler i rosteren, men sender HELLO: vises, og hendes recipes gemmes")
+    lua_errors(ny, kim)
+
+    # Info uden en profession, der havde recipes (fx en forældet HELLO): recipes hentes igen, når
+    # professionen er der igen, i stedet for at stå tom.
+    c = ny.cache(kim.key)
+    ny.L.eval("""function(ns, key)
+        ns.Data:ApplyPayload(key, "info", 1, { class = "MAGE", level = 60, profs = {} })
+    end""")(ny.ns, kim.key)
+    check(not _knows(ny, kim) and c.dataV.recipes == 0, "Info uden professionen: recipes regnes ikke længere for hentet")
+    kim.ns.Sync.SendHello(kim.ns.Sync, False)
+    w.step(20)
+    check(_knows(ny, kim), "... og hentes igen ved hendes næste HELLO")
+
+    # To navne for samme profession i én payload (ejeren har skiftet klientsprog): de lægges sammen.
+    n = ny.L.eval("""function(ns, key)
+        ns.Data:ApplyPayload(key, "recipes", 2000000000,
+            { p = { Alchemy = { i = { 13510, 13446 }, e = {} }, Alchemie = { i = { 2996 }, e = {} } } })
+        local n = 0
+        for _ in pairs(ns.Data:GetChar(key).profs.Alchemy.items) do n = n + 1 end
+        return n
+    end""")(ny.ns, kim.key)
+    check(n == 3, f"\"Alchemy\" og \"Alchemie\" i samme payload giver alle 3 recipes ({n})")
+    lua_errors(ny, kim)
+
+    # Mainline: en tom liste fra GetProfessions (ikke indlæst endnu) er ikke "alt er droppet".
+    w = World()
+    mia = _player(w, "Mia", [ALCH, herb], flavor="mainline")
+    _join(w, mia, 20)
+    mia.L.execute("sim_kept = sim_me.profs sim_me.profs = {}")
+    mia.g.sim_fire("SKILL_LINES_CHANGED")
+    w.step(5)
+    check(_my_profs(mia) == ["Alchemy", "Herbalism"] and mia.db.myChars[mia.key].dropped is None,
+          "Mainline: tom professionsliste dropper intet")
+    mia.L.execute("sim_me.profs = sim_kept")
+    lua_errors(mia)
+
+
 if __name__ == "__main__":
     scenario_sync()
     scenario_relay()
@@ -2004,6 +2147,7 @@ if __name__ == "__main__":
     scenario_cleanup()
     scenario_combat()
     scenario_status()
+    scenario_review()
     print()
     if failures:
         print(f"{len(failures)} FEJL")

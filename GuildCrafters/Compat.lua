@@ -89,7 +89,7 @@ function Compat.GetGuildMembers()
         end
     end
     local showsOffline = GetGuildRosterShowOffline and GetGuildRosterShowOffline() and true or false
-    local complete = total > 0 and #members == total and (showsOffline or anyOffline or total == 1)
+    local complete = total > 0 and #members == total and (showsOffline or anyOffline)
     return members, complete
 end
 
@@ -188,10 +188,11 @@ end
 -- i WoW Forever) tæller encounter-lockdown med: addon-beskeder er spærret under raid-encounters og M+.
 -- Navnene er tjekket mod Forever-betaens funktionsliste (build 69893); pcall, fordi de ikke er prøvet i
 -- en rigtig klient.
+local LOCKDOWN_CHECKS = { "InChatMessagingLockdown", "AreOutgoingAddonChatMessagesRestricted" }
 function Compat.InCombat()
     if InCombatLockdown and InCombatLockdown() then return true end
     local C = C_ChatInfo
-    for _, name in ipairs({ "InChatMessagingLockdown", "AreOutgoingAddonChatMessagesRestricted" }) do
+    for _, name in ipairs(LOCKDOWN_CHECKS) do
         local fn = C and C[name]
         if fn then
             local ok, locked = pcall(fn)
@@ -279,7 +280,7 @@ local PROF_SPELLS = {
 -- vores egen klient ikke slå op) og som reserve for ens eget sprog. Skrevet efter hukommelsen og ikke
 -- tjekket i de enkelte klienter: et navn, der ikke står her, vises bare, som det er.
 local PROF_NAMES = {
-    ["Alchemy"] = { "Alchimie", "Alquimia", "Alchimia", "Алхимия", "연금술", "炼金术", "鍊金術" },
+    ["Alchemy"] = { "Alchemie", "Alchimie", "Alquimia", "Alchimia", "Алхимия", "연금술", "炼金术", "鍊金術" },
     ["Blacksmithing"] = { "Schmiedekunst", "Forge", "Herrería", "Ferraria", "Forgiatura", "Кузнечное дело",
         "대장기술", "锻造", "鍛造" },
     ["Enchanting"] = { "Verzauberkunst", "Enchantement", "Encantamiento", "Encantamento", "Incantamento",
@@ -309,8 +310,11 @@ local PROF_NAMES = {
 
 local profKeys          -- [navn] = engelsk nøgle
 local spellsMissing     -- spellnavne, der ikke var indlæst, da tabellen blev bygget
+local keyBuilds = 0     -- en spell, klienten slet ikke har (Jewelcrafting i Classic Era), kommer aldrig:
+local MAX_KEY_BUILDS = 5 -- prøv kun et par gange, ellers blev tabellen bygget igen for hvert ukendt navn
 
 local function BuildProfKeys()
+    keyBuilds = keyBuilds + 1
     profKeys, spellsMissing = {}, false
     for key, names in pairs(PROF_NAMES) do
         for _, name in ipairs(names) do profKeys[name] = key end
@@ -330,7 +334,9 @@ end
 function Compat.ProfessionKey(name, id)
     if id and PROF_BY_ID[id] then return PROF_BY_ID[id] end
     if not name then return nil end
-    if not profKeys or (spellsMissing and not profKeys[name]) then BuildProfKeys() end
+    if not profKeys or (spellsMissing and not profKeys[name] and keyBuilds < MAX_KEY_BUILDS) then
+        BuildProfKeys()
+    end
     return profKeys[name] or name
 end
 
@@ -489,7 +495,8 @@ function Compat.GetSkillRanks()
                 if name then ranks[Compat.ProfessionKey(name, skillLine)] = { rank = rank, max = maxRank } end
             end
         end
-        return ranks, true
+        -- En tom liste kan være "ikke indlæst endnu" lige så vel som "ingen professions": ikke komplet.
+        return ranks, next(ranks) ~= nil
     end
     local headers, collapsed = 0, false
     for i = 1, GetNumSkillLines() do
