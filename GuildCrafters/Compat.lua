@@ -187,10 +187,13 @@ end
 -- Er spilleren i kamp? Så venter synkroniseringen (se Comm.lua), og vinduet opdateres ikke af sig selv.
 -- Kun InCombatLockdown. Mainline (Midnight-reglerne, også i WoW Forever) har desuden
 -- C_ChatInfo.InChatMessagingLockdown og AreOutgoingAddonChatMessagesRestricted, og 0.15 behandlede
--- først begge som "i kamp". Set i Retail 12.1.0 (2026-10-13): en af dem svarer true midt i Stormwind
--- uden for kamp, så sync stod på pause for evigt, og Crafting-fanen blev aldrig fyldt. Hvad de betyder,
--- er ikke bekræftet, så de styrer ingenting. Er addon-beskeder spærret under en encounter, fejler
--- afsendelsen bare, og genforsøg og hjerteslag retter op bagefter (som ved tabte beskeder).
+-- først begge som "i kamp". Set i Retail 12.1.0 (2026-10-13, /gc debug ping midt i Stormwind uden for
+-- kamp): AreOutgoingAddonChatMessagesRestricted svarer true, selvom en addon-besked på guild-kanalen
+-- går igennem og kommer retur, mens InChatMessagingLockdown svarer false. Med begge som "i kamp" stod
+-- sync på pause for evigt, og Crafting-fanen blev aldrig fyldt. Den første betyder altså ikke "du kan
+-- ikke sende", og den anden er ikke set under en encounter, så ingen af dem styrer noget. Er
+-- addon-beskeder spærret under en encounter, fejler afsendelsen bare, og genforsøg og hjerteslag
+-- retter op bagefter (som ved tabte beskeder).
 function Compat.InCombat()
     return InCombatLockdown ~= nil and InCombatLockdown() and true or false
 end
