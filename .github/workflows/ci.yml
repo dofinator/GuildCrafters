@@ -13,6 +13,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # simulatoren henter den udgivne 0.14 fra tagget (tools/sim/sim.py, OLD)
 
       - uses: actions/setup-python@v5
         with:

@@ -20,8 +20,15 @@ function Compat.RealmName()
         or (GetRealmName():gsub("[%s%-]", ""))
 end
 
+-- Kaldes meget (hver sammenligning i en sortering efter online-status): i belastningstesten med 200
+-- addon-brugere var det 620.000 kald pr. opdatering af Crafting-fanen. Navn og realm ændrer sig ikke
+-- efter login, så nøglen huskes derfra.
+local playerKey
 function Compat.PlayerKey()
-    return UnitName("player") .. "-" .. Compat.RealmName()
+    if playerKey then return playerKey end
+    local key = UnitName("player") .. "-" .. Compat.RealmName()
+    if ns.loggedIn then playerKey = key end
+    return key
 end
 
 -- Navne fra guild-roster og addon-beskeder kan mangle realm. Gør dem til "Navn-Realm".
@@ -55,14 +62,21 @@ function Compat.RequestGuildRoster()
     end
 end
 
--- Returnerer en liste af { key, level, class (fil-token), online, zone, note, index }.
+-- Returnerer en liste af { key, level, class (fil-token), online, zone, note, index }, og om listen
+-- er komplet: kun så må et navn, der mangler, regnes for "ikke længere i guilden".
+-- Ikke komplet: rosteren er ikke indlæst endnu (0 medlemmer), eller der kunne læses færre navne end
+-- det samlede antal. Med "Show Offline Members" slået fra er det uvist, om klienten kun giver
+-- online-medlemmerne (og måske også kun tæller dem); derfor kræves der så mindst ét offline medlem
+-- blandt de læste, før listen regnes for hele guilden.
 function Compat.GetGuildMembers()
     local members = {}
-    if not IsInGuild() then return members end
-    local total = GetNumGuildMembers()
+    if not IsInGuild() then return members, false end
+    local total = GetNumGuildMembers() or 0
+    local anyOffline = false
     for i = 1, total do
         local name, _, _, level, _, zone, note, _, online, _, classFile = GetGuildRosterInfo(i)
         if name then
+            if not online then anyOffline = true end
             table.insert(members, {
                 key = Compat.FullName(name),
                 level = level,
@@ -74,7 +88,9 @@ function Compat.GetGuildMembers()
             })
         end
     end
-    return members
+    local showsOffline = GetGuildRosterShowOffline and GetGuildRosterShowOffline() and true or false
+    local complete = total > 0 and #members == total and (showsOffline or anyOffline or total == 1)
+    return members, complete
 end
 
 -- "3 days" / "5 hours" siden et offline medlem sidst var online, eller nil hvis det ikke kan slås op.
@@ -168,6 +184,23 @@ function Compat.Invite(key)
     end
 end
 
+-- Er spilleren i kamp? Så venter synkroniseringen (se Comm.lua). På Mainline (Midnight-reglerne, også
+-- i WoW Forever) tæller encounter-lockdown med: addon-beskeder er spærret under raid-encounters og M+.
+-- Navnene er tjekket mod Forever-betaens funktionsliste (build 69893); pcall, fordi de ikke er prøvet i
+-- en rigtig klient.
+function Compat.InCombat()
+    if InCombatLockdown and InCombatLockdown() then return true end
+    local C = C_ChatInfo
+    for _, name in ipairs({ "InChatMessagingLockdown", "AreOutgoingAddonChatMessagesRestricted" }) do
+        local fn = C and C[name]
+        if fn then
+            local ok, locked = pcall(fn)
+            if ok and locked == true then return true end
+        end
+    end
+    return false
+end
+
 ------------------------------------------------------------------------
 -- Talents
 ------------------------------------------------------------------------
@@ -218,6 +251,89 @@ function Compat.ParseLink(link)
     if id then return "enchant", tonumber(id) end
 end
 
+------------------------------------------------------------------------
+-- Professionsnøgler: det engelske navn ("Alchemy"), uanset klientens sprog
+------------------------------------------------------------------------
+
+-- Classic-klienterne giver kun professionens navn på klientens sprog, og det navn var nøglen i data og
+-- beskeder: en tysk klient sendte "Alchimie", som ingen andre kunne slå op (intet ikon, ingen filtre).
+-- Nøglen er nu altid det engelske navn, så enUS-klienter og 0.14-klienter ser det, de altid har set.
+
+-- Mainline har et fast ID pr. profession (skill line).
+local PROF_BY_ID = {
+    [171] = "Alchemy", [164] = "Blacksmithing", [333] = "Enchanting", [202] = "Engineering",
+    [182] = "Herbalism", [773] = "Inscription", [755] = "Jewelcrafting", [165] = "Leatherworking",
+    [186] = "Mining", [393] = "Skinning", [197] = "Tailoring", [185] = "Cooking", [129] = "First Aid",
+    [356] = "Fishing",
+}
+
+-- Classic: professionens spell hedder det samme som professionen på klientens sprog (Apprentice-rank).
+-- Herbalism er undtagelsen: dens spell hedder "Herb Gathering", så den kommer kun fra tabellen nedenfor.
+local PROF_SPELLS = {
+    ["Alchemy"] = 2259, ["Blacksmithing"] = 2018, ["Enchanting"] = 7411, ["Engineering"] = 4036,
+    ["Jewelcrafting"] = 25229, ["Leatherworking"] = 2108, ["Mining"] = 2575, ["Skinning"] = 8613,
+    ["Tailoring"] = 3908, ["Cooking"] = 2550, ["First Aid"] = 3273, ["Fishing"] = 7620,
+}
+
+-- Kendte navne på andre sprog. Bruges til navne modtaget fra ikke-engelske 0.14-klienter (dem kan
+-- vores egen klient ikke slå op) og som reserve for ens eget sprog. Skrevet efter hukommelsen og ikke
+-- tjekket i de enkelte klienter: et navn, der ikke står her, vises bare, som det er.
+local PROF_NAMES = {
+    ["Alchemy"] = { "Alchimie", "Alquimia", "Alchimia", "Алхимия", "연금술", "炼金术", "鍊金術" },
+    ["Blacksmithing"] = { "Schmiedekunst", "Forge", "Herrería", "Ferraria", "Forgiatura", "Кузнечное дело",
+        "대장기술", "锻造", "鍛造" },
+    ["Enchanting"] = { "Verzauberkunst", "Enchantement", "Encantamiento", "Encantamento", "Incantamento",
+        "Наложение чар", "마법부여", "附魔" },
+    ["Engineering"] = { "Ingenieurskunst", "Ingénierie", "Ingeniería", "Engenharia", "Ingegneria",
+        "Инженерное дело", "기계공학", "工程学", "工程學" },
+    ["Herbalism"] = { "Kräuterkunde", "Herboristerie", "Herboristería", "Herborismo", "Erbalismo",
+        "Травничество", "약초채집", "草药学", "草藥學" },
+    ["Inscription"] = { "Inschriftenkunde", "Calligraphie", "Inscripción", "Escrivania", "Runografia",
+        "Начертание", "주문각인", "铭文", "銘文學" },
+    ["Jewelcrafting"] = { "Juwelenschleifen", "Juwelierskunst", "Joaillerie", "Joyería", "Joalheria",
+        "Oreficeria", "Ювелирное дело", "보석세공", "珠宝加工", "珠寶設計" },
+    ["Leatherworking"] = { "Lederverarbeitung", "Travail du cuir", "Peletería", "Couraria", "Conciatura",
+        "Кожевничество", "가죽세공", "制皮", "製皮" },
+    ["Mining"] = { "Bergbau", "Minage", "Minería", "Mineração", "Estrazione", "Горное дело", "채광", "采矿",
+        "採礦" },
+    ["Skinning"] = { "Kürschnerei", "Dépeçage", "Desuello", "Esfolamento", "Scuoiatura", "Снятие шкур",
+        "무두질", "剥皮", "剝皮" },
+    ["Tailoring"] = { "Schneiderei", "Couture", "Sastrería", "Alfaiataria", "Sartoria", "Портняжное дело",
+        "재봉술", "裁缝", "裁縫" },
+    ["Cooking"] = { "Kochkunst", "Cuisine", "Cocina", "Culinária", "Cucina", "Кулинария", "요리", "烹饪",
+        "烹飪" },
+    ["First Aid"] = { "Erste Hilfe", "Secourisme", "Primeros auxilios", "Primeiros Socorros",
+        "Primo Soccorso", "Первая помощь", "응급치료", "急救" },
+    ["Fishing"] = { "Angeln", "Pêche", "Pesca", "Рыбная ловля", "낚시", "钓鱼", "釣魚" },
+}
+
+local profKeys          -- [navn] = engelsk nøgle
+local spellsMissing     -- spellnavne, der ikke var indlæst, da tabellen blev bygget
+
+local function BuildProfKeys()
+    profKeys, spellsMissing = {}, false
+    for key, names in pairs(PROF_NAMES) do
+        for _, name in ipairs(names) do profKeys[name] = key end
+    end
+    -- Klientens egne navne vinder over tabellen.
+    if not Compat.IS_MAINLINE and GetLocale and GetLocale() ~= "enUS" then
+        for key, spellID in pairs(PROF_SPELLS) do
+            local name = Compat.SpellName(spellID)
+            if name then profKeys[name] = key else spellsMissing = true end
+        end
+    end
+    for key in pairs(PROF_NAMES) do profKeys[key] = key end
+end
+
+-- Den faste nøgle for en profession ud fra navnet (på et hvilket som helst kendt sprog) og, på
+-- Mainline, dens ID. Ukendte navne returneres uændret.
+function Compat.ProfessionKey(name, id)
+    if id and PROF_BY_ID[id] then return PROF_BY_ID[id] end
+    if not name then return nil end
+    if not profKeys or (spellsMissing and not profKeys[name]) then BuildProfKeys() end
+    return profKeys[name] or name
+end
+
 local function NewScan(name, rank, maxRank)
     return { name = name, rank = rank, max = maxRank, items = {}, enchants = {}, reagents = {},
         collapsed = false }
@@ -263,6 +379,7 @@ local function ReadTradeSkillMainline()
     local info = T.GetBaseProfessionInfo and T.GetBaseProfessionInfo()
     local name = info and (info.parentProfessionName or info.professionName)
     if not name or name == "" then return end
+    name = Compat.ProfessionKey(name, info.parentProfessionID or info.professionID)
 
     local basic = Enum and Enum.CraftingReagentType and Enum.CraftingReagentType.Basic
     local scan = NewScan(name, info.skillLevel or 0, info.maxSkillLevel or 0)
@@ -305,6 +422,7 @@ function Compat.ReadTradeSkill()
     if IsTradeSkillLinked and IsTradeSkillLinked() then return end
     local name, rank, maxRank = GetTradeSkillLine()
     if not name or name == "UNKNOWN" then return end
+    name = Compat.ProfessionKey(name)
 
     local scan = NewScan(name, rank, maxRank)
     for i = 1, GetNumTradeSkills() do
@@ -329,6 +447,7 @@ function Compat.ReadCraft()
     if not GetNumCrafts then return end
     local name, rank, maxRank = GetCraftDisplaySkillLine()
     if not name then return end
+    name = Compat.ProfessionKey(name)
 
     local scan = NewScan(name, rank, maxRank)
     for i = 1, GetNumCrafts() do
@@ -353,31 +472,36 @@ function Compat.ExpandAll(kind)
     end
 end
 
--- Returnerer { [skillNavn] = { rank, max } } for alle synlige skill lines.
--- Lukkede headers i Skills-fanen skjuler linjer, så fravær betyder ikke "ikke lært".
+-- Returnerer { [nøgle] = { rank, max } } for alle synlige skill lines (professions under deres faste
+-- nøgle, se Compat.ProfessionKey), og om listen er komplet.
+-- Lukkede headers i Skills-fanen skjuler linjer, og lige efter login er listen tom: kun en komplet
+-- liste må bruges til at konkludere, at en profession er droppet.
 function Compat.GetSkillRanks()
     local ranks = {}
     if not GetNumSkillLines then
         -- Mainline: GetProfessions() giver et indeks pr. profession (med huller for dem, man ikke har).
-        if GetProfessions and GetProfessionInfo then
-            local indexes = { GetProfessions() }
-            for i = 1, select("#", GetProfessions()) do
-                local index = indexes[i]
-                if index then
-                    local name, _, rank, maxRank = GetProfessionInfo(index)
-                    if name then ranks[name] = { rank = rank, max = maxRank } end
-                end
+        if not (GetProfessions and GetProfessionInfo) then return ranks, false end
+        local indexes = { GetProfessions() }
+        for i = 1, select("#", GetProfessions()) do
+            local index = indexes[i]
+            if index then
+                local name, _, rank, maxRank, _, _, skillLine = GetProfessionInfo(index)
+                if name then ranks[Compat.ProfessionKey(name, skillLine)] = { rank = rank, max = maxRank } end
             end
         end
-        return ranks
+        return ranks, true
     end
+    local headers, collapsed = 0, false
     for i = 1, GetNumSkillLines() do
-        local name, isHeader, _, rank, _, _, maxRank = GetSkillLineInfo(i)
-        if name and not isHeader then
-            ranks[name] = { rank = rank, max = maxRank }
+        local name, isHeader, isExpanded, rank, _, _, maxRank = GetSkillLineInfo(i)
+        if isHeader then
+            headers = headers + 1
+            if not isExpanded then collapsed = true end
+        elseif name then
+            ranks[Compat.ProfessionKey(name)] = { rank = rank, max = maxRank }
         end
     end
-    return ranks
+    return ranks, headers > 0 and not collapsed
 end
 
 ------------------------------------------------------------------------

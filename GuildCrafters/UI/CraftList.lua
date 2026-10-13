@@ -517,8 +517,8 @@ local function Build(content)
     empty:SetText("Your craft list is empty.\nClick + next to a recipe in the Crafting tab to add it.")
 
     local legend = UI.CreateFooter(content)
-    legend:SetText("|cff40ff40Green|r = you have enough. |cffff6060Red|r = missing: right-click it to ask who has it. "
-        .. "Right-click an item to whisper its crafter.")
+    -- Kort nok til at dele linjen med statuslinjen til højre (UI.CreateFooter).
+    legend:SetText("|cff40ff40Green|r = you have enough. |cffff6060Red|r = missing. Right-click a row to ask for it.")
 end
 
 UI:AddTab("Craft List", Build, Refresh)
