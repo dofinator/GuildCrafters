@@ -25,4 +25,3 @@ A stability release. There is nothing to set up, and it works together with guil
 
 - The footer texts in Craft List and Mats are shorter, to make room for the status line.
 - Cleanup only happens on your own computer. Guild members on 0.14 keep seeing departed members until they update.
-- Retail (12.x) is no longer listed as a supported game version. GuildCrafters is made for TBC Anniversary, Classic Era and WoW Forever.
