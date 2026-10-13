@@ -6,8 +6,9 @@ i guilden, så der er ingen server.
 
 ## Installation
 
-1. Kopiér mappen `GuildCrafters` (den inderste, med `GuildCrafters.toc`) til
-   `World of Warcraft\_anniversary_\Interface\AddOns\`.
+1. Installér [GuildCrafters fra CurseForge](https://www.curseforge.com/wow/addons/guildcrafters), fx med
+   CurseForge-appen. Eller hent zip'en fra [Releases](https://github.com/dofinator/GuildCrafters/releases)
+   og pak den ud i `World of Warcraft\_anniversary_\Interface\AddOns\`.
 2. Genstart spillet. GuildCrafters skal stå på AddOns-listen.
 3. Åbn hvert af dine profession-vinduer én gang, så addonen kender dine opskrifter.
 
@@ -36,3 +37,21 @@ python tools/sim/sim.py
 ```
 
 Simulatoren kører addonen i flere falske WoW-klienter og tjekker sync, relay, mats, alts og UI.
+
+### Testudgave i spillet
+
+Den udgivne addon installeres fra CurseForge i `AddOns\GuildCrafters`. Koden i repoet køres ved siden
+af som **GuildCraftersTest**: et link fra spillets AddOns-mappe til `GuildCrafters/` i repoet, som
+indlæses via `GuildCraftersTest.toc`.
+
+```
+mklink /J "C:\Program Files (x86)\World of Warcraft\_anniversary_\Interface\AddOns\GuildCraftersTest" "<repo>\GuildCrafters"
+```
+
+- Slå kun én af de to til på AddOns-listen. Er begge slået til, kører den udgivne, og testudgaven
+  skriver i chatten, at den ikke kører.
+- Ændringer i repoet er live efter `/reload`. Vinduet hedder "GuildCrafters [TEST]".
+- Testudgaven gemmer sine data for sig (`SavedVariables\GuildCraftersTest.lua`).
+- `GuildCraftersTest.toc` skal liste de samme filer og samme `Interface`/`Version` som
+  `GuildCrafters.toc`; simulatoren fejler, hvis de to løber fra hinanden. Den kommer ikke med i pakken
+  til CurseForge.

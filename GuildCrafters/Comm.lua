@@ -222,7 +222,10 @@ function Comm:OnCommReceived(prefix, text, distribution, sender)
     end
 end
 
-Comm:RegisterComm(Comm.PREFIX, "OnCommReceived")
+-- En kopi, der holder sig i ro (se Core.lua), må heller ikke lytte med på addon-beskederne.
+if not ns.inactive then
+    Comm:RegisterComm(Comm.PREFIX, "OnCommReceived")
+end
 
 -- Rå modtagelse, før AceComm samler chunks: viser om noget overhovedet når frem.
 ns:RegisterEvent("CHAT_MSG_ADDON", function(_, prefix, text, channel, sender)

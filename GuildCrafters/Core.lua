@@ -2,6 +2,15 @@ local addonName, ns = ...
 
 ns.VERSION = ns.Compat.GetAddOnMetadata(addonName, "Version") or "dev"
 ns.DB_SCHEMA = 1
+-- Gemte data ligger i en global opkaldt efter addon-mappen: GuildCraftersDB, og GuildCraftersTestDB
+-- for testudgaven (GuildCraftersTest.toc), så de to aldrig skriver i hinandens data.
+ns.DB_NAME = addonName .. "DB"
+ns.IS_TEST = addonName ~= "GuildCrafters"
+
+-- Testudgaven og den udgivne addon deler /gc, addon-beskeder og vinduer, så kun én af dem må køre.
+-- Den, der indlæses sidst (testudgaven), holder sig helt i ro, hvis den anden allerede er indlæst.
+local otherCopy = ns.IS_TEST and "GuildCrafters" or "GuildCraftersTest"
+ns.inactive = ns.Compat.IsAddOnLoaded(otherCopy) and true or false
 
 function ns:Print(msg)
     DEFAULT_CHAT_FRAME:AddMessage("|cff33ff99GuildCrafters|r: " .. tostring(msg))
@@ -18,6 +27,7 @@ local frame = CreateFrame("Frame")
 local handlers = {}
 
 function ns:RegisterEvent(event, fn)
+    if ns.inactive then return false end
     if not handlers[event] then
         -- pcall: events, der ikke findes i den aktuelle client, ignoreres i stedet for at fejle.
         if not pcall(frame.RegisterEvent, frame, event) then return false end
@@ -32,6 +42,15 @@ frame:SetScript("OnEvent", function(_, event, ...)
         SafeCall(fn, event, ...)
     end
 end)
+
+if ns.inactive then
+    -- Sig det én gang ved login; ellers ser det bare ud, som om addonen er død.
+    frame:RegisterEvent("PLAYER_LOGIN")
+    handlers.PLAYER_LOGIN = { function()
+        ns:Print("|cffff4040Not running:|r " .. otherCopy .. " is enabled too. Disable one of them in the "
+            .. "AddOns list, then /reload.")
+    end }
+end
 
 -- Interne beskeder mellem moduler, fx "ME_CHANGED" og "ROSTER_CHANGED".
 local listeners = {}
@@ -81,6 +100,8 @@ ns:RegisterCommand("help", function()
         ns:Print("  " .. line)
     end
 end)
+
+if ns.inactive then return end    -- /gc tilhører den kopi, der kører
 
 SLASH_GUILDCRAFTERS1 = "/gc"
 SLASH_GUILDCRAFTERS2 = "/guildcrafters"
