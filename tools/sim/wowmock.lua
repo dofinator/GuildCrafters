@@ -200,6 +200,9 @@ ItemRefTooltip = NewWidget("GameTooltip", "ItemRefTooltip")
 DEFAULT_CHAT_FRAME = NewWidget("Frame", "DEFAULT_CHAT_FRAME")
 function DEFAULT_CHAT_FRAME:AddMessage(text)
     local clean = tostring(text):gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
+    -- Som chatten i spillet: "||" vises som ét "|", mens et enkelt "|h"/"|a" er en styrekode og
+    -- forsvinder ("tank|healer|dps|auto" blev til "tankealer|dps|uto", set 2026-10-13).
+    clean = clean:gsub("||", "\1"):gsub("|h", ""):gsub("|a", "|"):gsub("\1", "|")
     table.insert(sim_prints, clean)
     sim_py_print(clean)
 end

@@ -1,6 +1,6 @@
 # GuildCrafters – SPEC v0.9
 
-> **Status:** v0.14.0 (UX-gennemgang: Crafting som auktionshuset, se §7). Alle faser + Crafting-fane med kategorier, stats-søgning, reagents-sync og Craft List.
+> **Status:** v0.14.1 (UX-gennemgang: Crafting som auktionshuset, se §7). Alle faser + Crafting-fane med kategorier, stats-søgning, reagents-sync og Craft List.
 > Testet i simulatoren (`tools/sim`, 59 tjek). Fase 1–2 og UI er også set i TBC Anniversary.
 > Mangler: rigtig test med flere spillere i guilden.
 
@@ -304,6 +304,8 @@ layoutet ud fra mockups: én linje pr. recipe, filterlinje med "Usable items" og
   "Nobody in the guild".
 - Item-rækken viser crafteren i samme kolonne: "Crafter: Anna +1" ("You", hvis man selv kan; ét navn
   og "+N", så rækken ikke bliver overlæsset; "No crafter in the guild", hvis ingen kan længere).
+  Rækkefølge: en selv, derefter en af ens egne alts, derefter den første (online først). Kun det korte
+  navn, uden "(alt of X)"; det fulde navn står i tooltippen og menuen.
 - Øverst: "2 of 3 ready - 3 mats missing". Hover på et item viser tooltip med "Crafted by"; højreklik giver
   whisper til en crafter. Højreklik på en mat giver "Ask for X" til dem, der har den (online først).
 - Items, der er Ready, er foldet sammen til én linje, så det, man mangler, står tydeligt. `+`/`-`-knappen

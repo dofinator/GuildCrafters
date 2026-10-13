@@ -408,15 +408,24 @@ def scenario_alts():
     ns.Data.CraftListAdd(ns.Data, "i", 13510, 1)
     ns.UI.ShowTab(ns.UI, "Craft List")
     w.step(2)
-    row = annalt.L.eval("""function()
-        for _, f in ipairs(sim_allFrames) do
-            local item = rawget(f, "item")
-            if item and rawget(f, "toggle") and f:IsVisible() and item.name == "Flask of the Titans" then
-                return f.guild.sim_text
+    def crafter_row(client, name):
+        return _strip(client.L.eval("""function(name)
+            for _, f in ipairs(sim_allFrames) do
+                local item = rawget(f, "item")
+                if item and rawget(f, "toggle") and f:IsVisible() and item.name == name then
+                    return f.guild.sim_text
+                end
             end
-        end
-    end""")()
-    check(_strip(row) == "Crafter: Anna +1", f"Craft List foretrækker ens egen alt og viser det korte navn ({_strip(row)})")
+        end""")(name))
+
+    row = crafter_row(annalt, "Flask of the Titans")
+    check(row == "Crafter: Anna +1", f"Craft List foretrækker ens egen alt frem for en online crafter ({row})")
+    # Set fra en anden spiller: kun det korte navn, ikke "Annalt (alt of Anna)".
+    cara.ns.Data.CraftListAdd(cara.ns.Data, "i", 2568, 1)
+    cara.ns.UI.ShowTab(cara.ns.UI, "Craft List")
+    w.step(2)
+    row = crafter_row(cara, "Brown Linen Vest")
+    check(row.startswith("Crafter: Annalt") and "alt of" not in row, f"Crafteren står med det korte navn ({row})")
     lua_errors(annalt, bob, cara)
 
 
@@ -1168,9 +1177,11 @@ def scenario_ux():
     check(any("/gc <text>" in p for p in me.prints), "/gc help nævner søgningen")
     # "|h" og "|a" er styrekoder i chatten: i spillet blev "tank|healer|dps|auto" til "tankealer|dps|uto".
     role_help = next((p for p in me.prints if "/gc role" in p), "")
-    check("tank||healer||dps||auto" in role_help, f"/gc help fordobler \"|\", så chatten viser dem ({role_help})")
+    check("tank|healer|dps|auto" in role_help, f"/gc help viser \"|\" rigtigt i chatten ({role_help})")
     me.slash("role nonsense")
-    check("tank||healer||dps||auto" in me.prints[-1], f"... også i \"Usage: /gc role\" ({me.prints[-1]})")
+    check("tank|healer|dps|auto" in me.prints[-1], f"... også i \"Usage: /gc role\" ({me.prints[-1]})")
+    me.slash("mats")
+    check("/gc mats on|off" in me.prints[-1], f"... og i /gc mats ({me.prints[-1]})")
 
     # Shift-klik på et item i taskerne sætter navnet i søgefeltet (som i AH), men kun når chatten er lukket.
     link = "|cffffffff|Hitem:13510::::::::|h[Flask of the Titans]|h|r"
