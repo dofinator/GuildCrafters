@@ -358,7 +358,7 @@ end
 
 local function NewScan(name, rank, maxRank)
     return { name = name, rank = rank, max = maxRank, items = {}, enchants = {}, reagents = {},
-        collapsed = false }
+        superseded = {}, collapsed = false }
 end
 
 -- Reagents gemmes som { made = antal der laves, r = { itemID, antal, itemID, antal, ... } }.
@@ -407,7 +407,15 @@ local function ReadTradeSkillMainline()
     local scan = NewScan(name, info.skillLevel or 0, info.maxSkillLevel or 0)
     for _, recipeID in ipairs(T.GetAllRecipeIDs() or {}) do
         local recipe = T.GetRecipeInfo(recipeID)
-        if recipe and recipe.learned then
+        -- Samme recipe kan findes i flere ranks (hver sit ID, samme navn, forskellig pris): i Retail
+        -- stod "Accord of Critical Strike" to gange under hinanden. Kun den højeste rank, man har lært,
+        -- er med; de lavere meldes som afløst, så de også forsvinder fra det, der allerede er gemt.
+        -- Uden nextRecipeID i klienten (felterne er ikke bekræftet for WoW Forever) er alt som før.
+        local nextID = recipe and recipe.learned and recipe.nextRecipeID
+        local nextInfo = nextID and T.GetRecipeInfo(nextID)
+        if nextInfo and nextInfo.learned then
+            scan.superseded[recipeID] = true
+        elseif recipe and recipe.learned then
             local schematic = T.GetRecipeSchematic and T.GetRecipeSchematic(recipeID, false)
             -- Faste reagents: første (laveste) kvalitet i hver påkrævet plads.
             local list, complete = {}, true

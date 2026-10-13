@@ -1,6 +1,7 @@
 # GuildCrafters – SPEC v0.9
 
-> **Status:** v0.15.0 (stabilitet: sproguafhængige professioner, automatisk oprydning, pause i kamp, `/gc sync`
+> **Status:** v0.16.0 (overblik: Craft List med har/skal bruge, Mats i samme stil som Crafting, mindre støj;
+> se §7). v0.15.0 (stabilitet: sproguafhængige professioner, automatisk oprydning, pause i kamp, `/gc sync`
 > og statuslinje; se §4, §5 og §7). Alle faser + Crafting-fane med kategorier, stats-søgning, reagents-sync
 > og Craft List.
 > Testet i simulatoren (`tools/sim`, 23 scenarier / ca. 365 tjek, også sammen med udgivne 0.14-klienter).
@@ -141,6 +142,10 @@ GuildCraftersDB = {
 - **Scan er additivt:** Et filtreret vindue eller lukkede kategorier må aldrig fjerne recipes, og
   recipes kan ikke aflæres. Lukkede kategorier foldes ud én gang pr. åbning. Rank opdateres også fra
   Skills-fanen (`SKILL_LINES_CHANGED`).
+  - Eneste undtagelse (fra v0.16.0, kun Mainline): samme recipe kan findes i flere ranks, hver med sit
+    eget ID og samme navn. Kun den højeste rank, man har lært, gemmes (`nextRecipeID` fra
+    `C_TradeSkillUI.GetRecipeInfo`), og de lavere fjernes fra det, der allerede er gemt. Har klienten
+    ikke feltet, er alt som før. To spillere med hver sin rank af samme recipe står stadig på to linjer.
 - **Oprydning (fra v0.15.0), kun lokalt:** Der sendes aldrig en sletning. En slette-markør ville
   kunne slette data hos andre ved en fejl, og 0.14-klienter kender den ikke. 0.14-klienter bliver
   derfor ved med at vise og annoncere det, en 0.15-klient har ryddet op i; det er forventet.
@@ -353,7 +358,8 @@ layoutet ud fra mockups: én linje pr. recipe, filterlinje med "Usable items" og
 +-------------------+----------------------------------------------------+
 | 4 of 52 recipes · Consumables > Flasks                                 |
 ```
-- Kolonner: **Name** (quality-farve), **Lvl** (required level; tom for enchants og ting uden krav) og
+- Kolonner: **Name** (quality-farve), **Lvl** (required level; tom for enchants og ting uden krav, og
+  hele kolonnen skjules, når intet på listen har et level, fra v0.16.0) og
   **Crafters** (korte navne, online i grøn og først, højst to og derefter "+N"; alle står i tooltippen
   og højreklik-menuen). Klik på en overskrift sorterer, klik igen vender; pilen viser den aktive.
   Crafters-sorteringen sætter det, en anden online kan lave nu, øverst. Ca. 18 rækker ad gangen.
@@ -393,7 +399,11 @@ layoutet ud fra mockups: én linje pr. recipe, filterlinje med "Usable items" og
     det, man mangler).
   - Mats: "Hi! Do you have any [Thorium Ore] to spare?"
 - `[+]` lægger itemet på craft-listen; shift-klik lægger 5 på. Står recipen allerede på listen, har
-  højreklik-menuen også "Remove from craft list".
+  højreklik-menuen også "Remove from craft list". Der kommer ingen linje i chatten (fra v0.16.0);
+  rækken viser selv "x2".
+- Reagensernes navne bestilles, når rækkerne vises, og tooltippen vises igen, når de kommer, så der
+  ikke står "Loading..." (fra v0.16.0).
+- Whisper-menuerne (alle faner) foreslår ikke ens egne chars (fra v0.16.0).
 - Søgefelterne (alle faner) har et lille "x", og Esc rydder søgningen.
 - Mens item-navne hentes fra serveren (kold cache), står der "Loading recipes..." og ikke "Nothing here".
 
@@ -401,10 +411,15 @@ layoutet ud fra mockups: én linje pr. recipe, filterlinje med "Usable items" og
 - Grupperet pr. item (valgt af brugeren efter test i spillet, hvor én samlet mats-liste var uoverskuelig):
   hver item-række (lys baggrund) har antal, `[-] [+] [x]` og status til højre: "Ready" (grøn),
   "Missing N mats" (rød) eller "Reagents unknown". Lige under står itemets mats i kolonnerne
-  **Need / You have / Guild has**.
-- Need = antal × ceil(qty / made). You have = den aktuelle chars tasker og bank (`GetItemCount`) plus egne
-  alts fra seneste scan. Bruger flere items samme mat, fordeles beholdningen ovenfra og ned, så den
-  ikke tælles to gange. Grøn = nok, rød = mangler.
+  **Have / Guild has**.
+- Have skrives som i spillets eget profession-vindue (fra v0.16.0, valgt af brugeren ud fra en
+  før/efter-skitse): "2/5" = man har 2, og itemet skal bruge 5. Skal bruge = antal × ceil(qty / made).
+  Man har = den aktuelle chars tasker og bank (`GetItemCount`) plus egne alts fra seneste scan.
+  Bruger flere items samme mat, fordeles beholdningen ovenfra og ned, så den ikke tælles to gange:
+  det afgør Ready/Missing og farven (grøn = nok, rød = mangler), mens tallet altid er alt, man har.
+  Derfor kan "6/5" stå i rød; tooltippen siger så "Set aside for items above".
+- Toplinjen lægger behovet sammen på tværs af listen: "1 of 3 ready · still to get: 12 Veiled Crystal"
+  (højst to mats, resten som "+N more").
 - Guild has: op til tre andre (og guild banken) med antal, resten som "+N". Mangler man en mat, som
   ingen har, men som nogen kan crafte (fx Bolt of Linen Cloth til en vest), står der "Bob can craft it"
   eller "You can craft it", og højreklik giver "Add 4x to craft list" og whisper til crafteren. Ellers
@@ -419,10 +434,14 @@ layoutet ud fra mockups: én linje pr. recipe, filterlinje med "Usable items" og
   foran itemet folder ud/ind (huskes resten af sessionen).
 - `[-] [+]` ændrer antal med 1, shift-klik med 5 (shift-minus går ikke under 1). "Clear list" spørger først.
 
-**Mats:**
-- Samme layout, grupperet pr. mat: "Bob 40 (bags) · Anna 120 (bank) · Guild bank 200". Højst fire
-  navne pr. række, resten som "+N more" (alle står i tooltippen).
-- Tooltippen viser, hvornår hver kilde sidst er opdateret.
+**Mats** (fra v0.16.0 i samme stil som Crafting, valgt af brugeren ud fra en før/efter-skitse):
+- Én linje pr. mat med kolonnerne **Name** og **Who has it**: "Garrosh 129, Uther 3 +1 · Guild bank 200"
+  (korte navne, online i grøn, højst fire og derefter "+N"). Klik på en overskrift sorterer; "Who has
+  it" sorterer efter, hvor meget der er i alt (mest først), uden at tallet vises. Sorteringen huskes.
+- Den char, man selv spiller, er ikke med (det står i taskerne); ens alts er. Samme regel som
+  "Guild has" i item-tooltips.
+- Tooltippen har resten: fulde navne, tasker/bank, hvornår hver kilde sidst er opdateret, og hvad man
+  selv har.
 - "Share my mats" slår deling til og fra.
 - "Only my craft list" viser kun de mats, ens craft-liste skal bruge.
 

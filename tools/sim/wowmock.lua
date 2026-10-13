@@ -132,8 +132,9 @@ function Methods:GetEffectiveScale() return 1 end
 function Methods:GetCenter() return 0, 0 end
 
 -- Tooltip
-function Methods:SetOwner(owner) self.sim_lines = {} self.sim_owner = owner end
+function Methods:SetOwner(owner) self.sim_lines = {} self.sim_owner = owner self.sim_shown = true end
 function Methods:GetOwner() return rawget(self, "sim_owner") end
+function Methods:IsOwned(frame) return rawget(self, "sim_owner") == frame end
 local function SetLineText(self, i, text)
     local name = rawget(self, "sim_name")
     if not name then return end
@@ -716,8 +717,13 @@ if sim_flavor == "mainline" then
             table.insert(ids, UNLEARNED)
             return ids
         end,
+        -- p.ranks = { [lavere rank] = højere rank }: samme recipe i flere ranks, hver sit ID.
         GetRecipeInfo = function(recipeID)
-            return { recipeID = recipeID, learned = recipeID ~= UNLEARNED }
+            local p = OpenProf()
+            local base = (p and p.name ~= "Enchanting") and RECIPE_BASE or 0
+            local higher = p and p.ranks and p.ranks[recipeID - base]
+            return { recipeID = recipeID, learned = recipeID ~= UNLEARNED,
+                nextRecipeID = higher and (higher + base) or nil }
         end,
         GetRecipeSchematic = function(recipeID)
             local p = OpenProf()

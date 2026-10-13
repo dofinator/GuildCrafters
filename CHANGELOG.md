@@ -1,27 +1,16 @@
-# GuildCrafters 0.15.0
+# GuildCrafters 0.16.0
 
-A stability release. There is nothing to set up, and it works together with guild members who are still on 0.14.
+Small changes that make the window easier to read. Nothing to set up.
 
-## New
+## Changed
 
-- **Works on every game language.** Professions now show correctly, with icon and rank, between players on different client languages, for example German and English.
-- **No sync during combat.** GuildCrafters stays quiet while you fight and catches up a few seconds after. The open window is not refreshed in the middle of a fight either.
-- **Old data cleans itself up.** Members who left the guild disappear from Crafting, Mats and the tooltips right away, and are removed from your saved data after 7 days. A profession you dropped is hidden from the guild right away and removed after 7 days. If the member or the profession comes back within that week, nothing is lost.
-- **`/gc sync`** asks the guild for fresh data now, instead of waiting for the next automatic update.
-- **Status line** at the bottom right of the window: when you last received data, and how many guild members with the addon are online. Hover it for details.
-- **`/gc tooltip on|off`** turns the "Crafted by" and "Guild has" lines on item tooltips off or on. Inside the GuildCrafters window they are always shown.
-
-## Improved
-
-- Lighter in large guilds: the Crafting tab opens and searches with far less work when many members use the addon, and guild roster updates no longer cause extra work.
-- After a reinstall or a move to a new PC, your next change always reaches the guild. Before, others could keep showing your old data.
+- **Craft List** shows mats the way the game's own profession window does: "2/5" means you have 2 and the item needs 5. The top line now says what you still need to get in total, for example "still to get: 12 Veiled Crystal".
+- **Mats** looks like the Crafting tab: one line per mat, about twice as many on screen, and you can sort by name or by who has the most. Hover a mat to see bags and bank, and when it was last updated. The character you are playing is no longer listed there; you already see that in your bags.
+- Adding a recipe to your craft list no longer writes a line in the chat. The row shows "x1" instead.
+- Recipe tooltips show the names of the reagents right away instead of "Loading...".
+- The whisper menus no longer offer your own characters.
+- The Lvl column in Crafting is hidden when nothing on the list has a level, which gives the names more room.
 
 ## Fixed
 
-- `/gc help` showed "tankealer|dps|uto" instead of "tank|healer|dps|auto".
-- Craft List: the crafter on an item row is shown by short name, and one of your own characters is preferred.
-
-## Good to know
-
-- The footer texts in Craft List and Mats are shorter, to make room for the status line.
-- Cleanup only happens on your own computer. Guild members on 0.14 keep seeing departed members until they update.
+- Retail: a recipe you know in several ranks was listed once per rank under the same name. Only the highest rank you know is listed now.
