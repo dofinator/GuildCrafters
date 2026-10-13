@@ -442,6 +442,6 @@ ns:RegisterCommand("debug", function(rest)
             StartTour()
         end
     else
-        ns:Print("Usage: /gc debug dump [profession] | fake [count] | clear | comm | hello | ping | tour [stop]")
+        ns:Print(ns.Plain("Usage: /gc debug dump [profession] | fake [count] | clear | comm | hello | ping | tour [stop]"))
     end
 end, "/gc debug dump|fake N|clear|comm|hello|ping|tour - test tools")

@@ -396,7 +396,28 @@ def scenario_alts():
     check(c is not None and c.main == anna.key, "Bob ser Annalt som alt af Anna")
     check(("i", 2996) in bob.recipe_ids(annalt.key), "Bob kender Annalts tailoring-recipes")
     check(bob.recipe_ids(anna.key) == {("i", 13510), ("i", 13446)}, "Bob har stadig Annas recipes i cache")
-    lua_errors(annalt, bob)
+
+    # Craft List: kan en af ens egne alts lave det, står den på rækken (kort navn), også selvom en
+    # anden crafter er online og derfor sorteres først.
+    cara = Client(w, "Cara", "MAGE", 60, profs=[ALCH], talents=(0, 0, 31))
+    w.clients.append(cara)
+    cara.login()
+    cara.open_trade("Alchemy")
+    w.step(60)
+    ns = annalt.ns
+    ns.Data.CraftListAdd(ns.Data, "i", 13510, 1)
+    ns.UI.ShowTab(ns.UI, "Craft List")
+    w.step(2)
+    row = annalt.L.eval("""function()
+        for _, f in ipairs(sim_allFrames) do
+            local item = rawget(f, "item")
+            if item and rawget(f, "toggle") and f:IsVisible() and item.name == "Flask of the Titans" then
+                return f.guild.sim_text
+            end
+        end
+    end""")()
+    check(_strip(row) == "Crafter: Anna +1", f"Craft List foretrækker ens egen alt og viser det korte navn ({_strip(row)})")
+    lua_errors(annalt, bob, cara)
 
 
 def scenario_ui():
@@ -1145,6 +1166,11 @@ def scenario_ux():
     me.prints.clear()
     me.slash("help")
     check(any("/gc <text>" in p for p in me.prints), "/gc help nævner søgningen")
+    # "|h" og "|a" er styrekoder i chatten: i spillet blev "tank|healer|dps|auto" til "tankealer|dps|uto".
+    role_help = next((p for p in me.prints if "/gc role" in p), "")
+    check("tank||healer||dps||auto" in role_help, f"/gc help fordobler \"|\", så chatten viser dem ({role_help})")
+    me.slash("role nonsense")
+    check("tank||healer||dps||auto" in me.prints[-1], f"... også i \"Usage: /gc role\" ({me.prints[-1]})")
 
     # Shift-klik på et item i taskerne sætter navnet i søgefeltet (som i AH), men kun når chatten er lukket.
     link = "|cffffffff|Hitem:13510::::::::|h[Flask of the Titans]|h|r"

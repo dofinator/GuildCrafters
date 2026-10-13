@@ -2,7 +2,7 @@
 ## Title: GuildCrafters
 ## Notes: Guild overview: who is who, and who can craft what.
 ## Author: Christoffer
-## Version: 0.14.0
+## Version: 0.14.1
 ## SavedVariables: GuildCraftersDB
 ## IconTexture: Interface\Icons\Trade_BlackSmithing
 ## X-Curse-Project-ID: 1741924

@@ -16,6 +16,12 @@ function ns:Print(msg)
     DEFAULT_CHAT_FRAME:AddMessage("|cff33ff99GuildCrafters|r: " .. tostring(msg))
 end
 
+-- Tekst med "|" i (fx "tank|healer|dps") til chatten: "|h" og "|a" er styrekoder, så i spillet stod der
+-- "tankealer|dps|uto" i /gc help (set i tour 2026-10-13). "||" vises som ét "|".
+function ns.Plain(text)
+    return (text:gsub("|", "||"))
+end
+
 -- Kalder fn, men en fejl i ét modul må ikke stoppe de andre (fx minimap-knappen ved login).
 -- Fejlen vises stadig i WoW's normale fejlvindue.
 local function SafeCall(fn, ...)
@@ -97,7 +103,7 @@ ns:RegisterCommand("help", function()
     ns:Print("Commands:")
     ns:Print("  /gc <text> - search recipes, e.g. /gc flask (shift-click an item to paste its name)")
     for _, line in ipairs(helpLines) do
-        ns:Print("  " .. line)
+        ns:Print("  " .. ns.Plain(line))
     end
 end)
 

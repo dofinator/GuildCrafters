@@ -141,6 +141,6 @@ ns:RegisterCommand("mats", function(arg)
         Mats:SetSharing(false)
     else
         ns:Print("Sharing your mats is " .. (ns.db.settings.shareMats and "on" or "off")
-            .. ". Use /gc mats on|off")
+            .. ns.Plain(". Use /gc mats on|off"))
     end
 end, "/gc mats on|off - share your crafting mats with the guild")
