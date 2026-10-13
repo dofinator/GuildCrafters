@@ -231,9 +231,13 @@ GuildCraftersDB = {
     pr. session.
   - Simuleret med 10–50 % tilfældigt tab, 8 spillere (én blokeret): alle er synkroniseret efter 15 min.
     En times stilstand giver 6 beskeder pr. spiller.
-- **Pause i kamp (fra v0.15.0):** Mens spilleren er i kamp (`InCombatLockdown`; på Mainline også
-  encounter-lockdown, `C_ChatInfo.InChatMessagingLockdown`), sendes og behandles intet. Der pauses
-  i kamp, ikke i hele instances.
+- **Pause i kamp (fra v0.15.0):** Mens spilleren er i kamp (`InCombatLockdown`), sendes og behandles
+  intet. Der pauses i kamp, ikke i hele instances.
+  - Mainline har også `C_ChatInfo.InChatMessagingLockdown` og `AreOutgoingAddonChatMessagesRestricted`.
+    De styrer **ikke** pausen: i Retail 12.1.0 svarede en af dem true uden for kamp (set 2026-10-13),
+    så sync stod stille for evigt, og Crafting-fanen var tom. Er addon-beskeder spærret under en
+    encounter eller M+, fejler afsendelsen, og genforsøg og hjerteslag retter op bagefter.
+    `/gc debug ping` viser, hvad funktionerne svarer.
   - *Ud:* Beskeder, der skulle sendes, køes og sendes 1–4 s efter kampen (tilfældigt, fordi hele
     raidet forlader kampen samtidig). En nyere besked af samme slags erstatter den ældre i køen.
   - *Ind:* Andres beskeder gemmes som rå tekst og behandles efter kampen, én pr. 0,1 s. En `REQ`

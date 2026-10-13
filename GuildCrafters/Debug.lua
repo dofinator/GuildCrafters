@@ -426,6 +426,7 @@ ns:RegisterCommand("debug", function(rest)
                 tostring(IsInGuild()), tostring((ns.Compat.GuildKey())),
                 tostring(C_ChatInfo.IsAddonMessagePrefixRegistered
                     and C_ChatInfo.IsAddonMessagePrefixRegistered(ns.Comm.PREFIX))))
+            ns:Print("Lockdown: " .. ns.Compat.LockdownInfo() .. ", sync paused=" .. tostring(ns.Comm.paused))
         end)
     elseif sub == "hello" then
         ns.debugComm = true

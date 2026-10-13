@@ -1912,21 +1912,38 @@ def scenario_combat():
     check(L.eval("sim_refreshes") > 0 and ejer.cache(ven.key).role == "HEALER", "... men lige efter kampen")
     lua_errors(ejer, ven)
 
-    # Mainline: encounter-lockdown (ingen kamp-events) pauser på samme måde og opdages, når den er slut.
+    # Mainline: klientens lockdown-funktioner må ikke styre pausen. Set i Retail 12.1.0: en af dem
+    # svarer true uden for kamp; da de talte som "i kamp", stod sync stille for evigt, Crafting-fanen
+    # var tom, og rundturen gav 8 fejl.
     w = World()
     mia = _player(w, "Mia", [ALCH], flavor="mainline")
     ben = _player(w, "Ben", [TAIL], flavor="mainline")
+    mia.g.sim_lockdown = True               # fra start, som i Retail
     _join(w, mia, 2)
     _join(w, ben, 90)
-    mia.g.sim_lockdown = True
-    start = w.now
+    check(_knows(mia, ben) and _knows(ben, mia), "Mainline med lockdown-funktioner, der svarer true: sync kører")
+    status = mia.ns.Sync.StatusText(mia.ns.Sync)
+    check(not mia.ns.Comm.paused and "paused" not in status, f"... og statuslinjen siger ikke pause ({status})")
     mia.slash("role tank")
-    w.step(60)
-    check(len([m for m in w.sent if m[1] == "Mia" and m[0] > start]) == 0 and ben.cache(mia.key).role != "TANK",
-          "Mainline: under lockdown sendes intet")
-    mia.g.sim_lockdown = False
     w.step(20)
-    check(ben.cache(mia.key).role == "TANK", "... og det sendes, når lockdown er slut")
+    check(ben.cache(mia.key).role == "TANK", "... og ændringer sendes med det samme")
+    mia.slash("")                           # vinduet åbnes (indekset bygges), derefter kommer nye data
+    mia.ns.UI.ShowTab(mia.ns.UI, "Crafting")
+    w.step(3)
+    mia.prints.clear()
+    mia.slash("debug tour")
+    w.step(70)
+    report = mia.db.debugTour
+    errors = [f"{e.step}: {e.msg}" for _, e in report.errors.items()] if report else ["ingen rapport"]
+    check(not errors, "... og rundturen finder recipes i Crafting (0 fejl)" + (f" ({errors[0]})" if errors else ""))
+    mia.slash("debug ping")
+    w.step(6)
+    line = next((p for p in mia.prints if "Lockdown:" in p), "")
+    check("combat=false" in line and "InChatMessagingLockdown=true" in line and "sync paused=false" in line,
+          f"/gc debug ping viser, hvad klienten svarer ({line})")
+    mia.combat(True)                        # rigtig kamp pauser stadig
+    check(mia.ns.Sync.StatusText(mia.ns.Sync) == "Sync paused (in combat)", "Rigtig kamp pauser stadig på Mainline")
+    mia.combat(False)
     lua_errors(mia, ben)
 
 

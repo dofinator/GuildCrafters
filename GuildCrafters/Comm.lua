@@ -154,7 +154,8 @@ end
 --        forlader kampen samtidig). Nyere beskeder af samme slags erstatter ældre.
 --   ind: andres beskeder gemmes som rå tekst og behandles bagefter, nogle få ad gangen. REQ må ikke
 --        gå tabt (den, der spørger, giver op efter et par minutter), så de ryddes aldrig ud.
--- Der pauses i kamp, ikke i hele instances; på Mainline tæller encounter-lockdown med (Compat.InCombat).
+-- Der pauses i kamp (InCombatLockdown), ikke i hele instances. Klientens lockdown-funktioner på
+-- Mainline styrer ikke pausen; se Compat.InCombat for hvorfor.
 ------------------------------------------------------------------------
 
 local MAX_IN_BYTES = 1000000    -- loft over gemte indgående beskeder; de ældste, der ikke er REQ, ryger først

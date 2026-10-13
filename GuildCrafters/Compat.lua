@@ -184,22 +184,35 @@ function Compat.Invite(key)
     end
 end
 
--- Er spilleren i kamp? Så venter synkroniseringen (se Comm.lua). På Mainline (Midnight-reglerne, også
--- i WoW Forever) tæller encounter-lockdown med: addon-beskeder er spærret under raid-encounters og M+.
--- Navnene er tjekket mod Forever-betaens funktionsliste (build 69893); pcall, fordi de ikke er prøvet i
--- en rigtig klient.
-local LOCKDOWN_CHECKS = { "InChatMessagingLockdown", "AreOutgoingAddonChatMessagesRestricted" }
+-- Er spilleren i kamp? Så venter synkroniseringen (se Comm.lua), og vinduet opdateres ikke af sig selv.
+-- Kun InCombatLockdown. Mainline (Midnight-reglerne, også i WoW Forever) har desuden
+-- C_ChatInfo.InChatMessagingLockdown og AreOutgoingAddonChatMessagesRestricted, og 0.15 behandlede
+-- først begge som "i kamp". Set i Retail 12.1.0 (2026-10-13): en af dem svarer true midt i Stormwind
+-- uden for kamp, så sync stod på pause for evigt, og Crafting-fanen blev aldrig fyldt. Hvad de betyder,
+-- er ikke bekræftet, så de styrer ingenting. Er addon-beskeder spærret under en encounter, fejler
+-- afsendelsen bare, og genforsøg og hjerteslag retter op bagefter (som ved tabte beskeder).
 function Compat.InCombat()
-    if InCombatLockdown and InCombatLockdown() then return true end
-    local C = C_ChatInfo
-    for _, name in ipairs(LOCKDOWN_CHECKS) do
-        local fn = C and C[name]
+    return InCombatLockdown ~= nil and InCombatLockdown() and true or false
+end
+
+-- Til /gc debug ping: hvad svarer klientens lockdown-funktioner lige nu? "n/a" = findes ikke.
+function Compat.LockdownInfo()
+    local parts = { "combat=" .. tostring(Compat.InCombat()) }
+    for _, name in ipairs({ "InChatMessagingLockdown", "AreOutgoingAddonChatMessagesRestricted" }) do
+        local fn = C_ChatInfo and C_ChatInfo[name]
+        local value = "n/a"
         if fn then
-            local ok, locked = pcall(fn)
-            if ok and locked == true then return true end
+            local results = { pcall(fn) }
+            if results[1] then
+                for k = 2, math.max(2, #results) do results[k] = tostring(results[k]) end
+                value = table.concat(results, ",", 2)
+            else
+                value = "error"
+            end
         end
+        table.insert(parts, name .. "=" .. value)
     end
-    return false
+    return table.concat(parts, ", ")
 end
 
 ------------------------------------------------------------------------

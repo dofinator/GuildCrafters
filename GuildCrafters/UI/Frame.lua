@@ -302,7 +302,7 @@ local function RefreshAfterCombat()
         UI:RequestRefresh()
     end
 end
--- SYNC_STATUS kommer også, når pausen slutter uden et kamp-event (encounter-lockdown på Mainline).
+-- SYNC_STATUS kommer også, når pausen slutter, uden at kamp-eventet er set (Comm tjekker selv).
 ns:On("SYNC_STATUS", function()
     UI.UpdateStatus()
     RefreshAfterCombat()

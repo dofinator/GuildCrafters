@@ -673,9 +673,11 @@ sim_tooltipPostCalls = {}
 if sim_flavor == "mainline" then
     WOW_PROJECT_ID = 1
     function issecretvalue() return false end
-    -- Midnight-reglerne: addon-beskeder er spærret under encounters og M+, også mellem kampene.
+    -- Midnight-reglernes lockdown-funktioner. I Retail 12.1.0 svarede en af dem true uden for kamp
+    -- (set 2026-10-13), så addonen må ikke lade dem styre noget.
     sim_lockdown = false
     C_ChatInfo.InChatMessagingLockdown = function() return sim_lockdown end
+    C_ChatInfo.AreOutgoingAddonChatMessagesRestricted = function() return sim_lockdown end
 
     -- Items og spells
     C_Item = {
