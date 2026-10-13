@@ -475,12 +475,17 @@ lt.wrap(ns.Compat, "IsGuildMember", "IsGuildMember", true)
 lt.wrap(ns.Compat, "TooltipText", "TooltipText")
 lt.wrap(ns.Compat, "ItemDetails", "ItemDetails")
 do  -- GetItemInfo er en local i Compat.lua: byt den delte upvalue ud med en tæller.
+    -- lt.keep holder fast i de funktioner, der sættes ind med setupvalue. Lua 5.1's lua_setupvalue
+    -- sætter GC-barrieren på closuren og ikke på den delte upvalue, så en funktion, der kun kan nås
+    -- gennem upvaluen, kan blive samlet op midt i en GC-cyklus (set som tilfældige nedbrud).
+    lt.keep = {}
     local orig, i = upvalue(ns.Compat.ItemName, "GetItemInfo")
     counts.GetItemInfo = 0
-    setupvalue(ns.Compat.ItemName, i, function(...)
+    lt.keep.GetItemInfo = function(...)
         counts.GetItemInfo = counts.GetItemInfo + 1
         return orig(...)
-    end)
+    end
+    setupvalue(ns.Compat.ItemName, i, lt.keep.GetItemInfo)
 end
 
 -- Transport og sync
@@ -521,12 +526,13 @@ do
     local Rebuild, i = upvalue(Ensure, "Rebuild")
     lt.Rebuild = Rebuild
     counts.Rebuild, times.Rebuild = 0, 0
-    setupvalue(Ensure, i, function()
+    lt.keep.Rebuild = function()
         counts.Rebuild = counts.Rebuild + 1
         local t0 = clock()
         Rebuild()
         times.Rebuild = times.Rebuild + (clock() - t0)
-    end)
+    end
+    setupvalue(Ensure, i, lt.keep.Rebuild)
     lt.searchText = upvalue(ns.Index.SearchText, "searchText")
 end
 
