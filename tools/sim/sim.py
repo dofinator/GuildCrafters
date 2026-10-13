@@ -42,9 +42,9 @@ SPELL_TEXT = {7418: "Permanently enchant bracers to increase health by 5.",
               13646: "Permanently enchant bracers to increase defense by 1."}
 
 
-def toc_files():
+def toc_files(addon="GuildCrafters"):
     files = []
-    for line in open(os.path.join(ADDON, "GuildCrafters.toc"), encoding="utf-8"):
+    for line in open(os.path.join(ADDON, addon + ".toc"), encoding="utf-8"):
         line = line.strip()
         if not line or line.startswith("#"):
             continue
@@ -122,9 +122,11 @@ class World:
 
 class Client:
     def __init__(self, world, name, cls, level, guild=GUILD, profs=None, talents=(0, 0, 0),
-                 bags=None, saved=None, flavor="classic", spec_role=None):
+                 bags=None, saved=None, flavor="classic", spec_role=None, addon="GuildCrafters",
+                 also_loaded=()):
         self.world = world
         self.flavor = flavor            # "classic" (TBC Anniversary) eller "mainline" (retail / WoW Forever)
+        self.addon = addon              # mappenavnet: "GuildCrafters" eller testudgaven "GuildCraftersTest"
         self.name = name
         self.key = f"{name}-{REALM}"
         self.guild = guild
@@ -138,6 +140,8 @@ class Client:
         g.sim_py_print = self._print
         g.sim_version = toc_version()
         g.sim_flavor = flavor
+        g.sim_addon = addon
+        g.sim_loaded = L.table_from({name: True for name in also_loaded})
         L.execute(open(MOCK, encoding="utf-8").read())
 
         me = L.table_from({
@@ -171,7 +175,7 @@ class Client:
             g.sim_spells[sid] = sname
 
         self.ns = L.table()
-        for f in toc_files():
+        for f in toc_files(addon):
             code = open(os.path.join(ADDON, f), encoding="utf-8").read()
             g.sim_load_file(f, code, self.ns)
         if saved:
@@ -203,13 +207,18 @@ class Client:
     def login(self):
         self.online = True
         self.world.clients.append(self) if self not in self.world.clients else None
-        self.g.sim_fire("ADDON_LOADED", "GuildCrafters")
+        self.g.sim_fire("ADDON_LOADED", self.addon)
         self.g.sim_fire("PLAYER_LOGIN")
         self.world.push_roster()
 
+    @property
+    def db(self):
+        """Addonens gemte data: GuildCraftersDB, eller GuildCraftersTestDB for testudgaven."""
+        return self.g[self.addon + "DB"]
+
     def logout(self):
         """Gem SavedVariables som tekst og gå offline."""
-        saved = self.g.sim_dump(self.g.GuildCraftersDB)
+        saved = self.g.sim_dump(self.db)
         self.online = False
         self.world.push_roster()
         return saved
@@ -230,7 +239,7 @@ class Client:
         self.g.SlashCmdList.GUILDCRAFTERS(text)
 
     def cache(self, key):
-        guild = self.g.GuildCraftersDB.guilds[f"{REALM}/{self.guild}"]
+        guild = self.db.guilds[f"{REALM}/{self.guild}"]
         return guild and guild.chars[key]
 
     def recipe_ids(self, key):
@@ -1287,6 +1296,81 @@ def scenario_ux():
     lua_errors(again, anna, bob)
 
 
+def scenario_test_copy():
+    print("\nScenarie 16: testudgaven (GuildCraftersTest) ved siden af den udgivne addon")
+
+    def toc(name):
+        return [l.strip() for l in open(os.path.join(ADDON, name), encoding="utf-8")]
+
+    def head(lines, key):
+        return next((l for l in lines if l.startswith(f"## {key}:")), None)
+
+    def body(lines):
+        return [l for l in lines if l and not l.startswith("#")]
+
+    main, test = toc("GuildCrafters.toc"), toc("GuildCraftersTest.toc")
+    check(body(main) == body(test), "GuildCraftersTest.toc lister de samme filer som GuildCrafters.toc")
+    for key in ("Interface", "Version"):
+        check(head(main, key) == head(test, key),
+              f"Samme {key} i begge .toc-filer ({head(main, key)} / {head(test, key)})")
+    check(head(test, "SavedVariables") == "## SavedVariables: GuildCraftersTestDB",
+          f"Testudgaven gemmer i GuildCraftersTestDB ({head(test, 'SavedVariables')})")
+    check(head(test, "X-Curse-Project-ID") is None, "Testudgaven har intet CurseForge-projekt-id")
+
+    # Testudgaven alene: kører som normalt, synkroniserer med den udgivne og gemmer i sin egen global.
+    w = World()
+    anna = Client(w, "Anna", "PRIEST", 60, profs=[ALCH], talents=(5, 31, 15))
+    bob = Client(w, "Bob", "WARRIOR", 60, profs=[TAIL], talents=(5, 5, 41), addon="GuildCraftersTest")
+    w.clients = [anna, bob]
+    anna.login()
+    bob.login()
+    anna.open_trade("Alchemy")
+    bob.open_trade("Tailoring")
+    w.step(60)
+    check(bob.g.GuildCraftersTestDB is not None and bob.g.GuildCraftersDB is None,
+          "Testudgaven bruger GuildCraftersTestDB og rører ikke GuildCraftersDB")
+    check(bob.recipe_ids(anna.key) == {("i", 13510), ("i", 13446)}, "Testudgaven modtager Annas recipes")
+    check(anna.recipe_ids(bob.key) == {("i", 2996), ("i", 2568)}, "Anna modtager testudgavens recipes")
+
+    def titles(client):
+        client.slash("")
+        w.step(1)
+        return client.L.eval("""function()
+            local found = {}
+            for _, f in ipairs(sim_allFrames) do
+                if f.sim_text == "GuildCrafters" or tostring(f.sim_text):find("[TEST]", 1, true) then
+                    found[#found + 1] = f.sim_text
+                end
+            end
+            return table.concat(found, ";")
+        end""")()
+
+    check("[TEST]" in titles(bob), "Testudgavens vindue hedder \"GuildCrafters [TEST]\"")
+    check("[TEST]" not in titles(anna), "Den udgivne addons vindue hedder bare \"GuildCrafters\"")
+    lua_errors(anna, bob)
+    check("Tailoring" in bob.logout(), "Testudgavens data kan gemmes ved logout")
+
+    # Begge slået til: den udgivne er indlæst først, så testudgaven holder sig helt i ro.
+    w = World()
+    anna = Client(w, "Anna", "PRIEST", 60, profs=[ALCH], talents=(5, 31, 15))
+    both = Client(w, "Bob", "WARRIOR", 60, profs=[TAIL], talents=(5, 5, 41), addon="GuildCraftersTest",
+                  also_loaded=("GuildCrafters",))
+    w.clients = [anna, both]
+    anna.login()
+    both.login()
+    anna.open_trade("Alchemy")
+    both.open_trade("Tailoring")
+    w.step(60)
+    check(any("Not running" in p and "GuildCrafters is enabled too" in p for p in both.prints),
+          f"Begge slået til: testudgaven siger, at den ikke kører ({both.prints[:1]})")
+    check(both.g.SlashCmdList.GUILDCRAFTERS is None, "... og tager ikke /gc")
+    check(both.g.GuildCraftersTestDB is None, "... og opretter ingen gemte data")
+    check(not any(s[1] == "Bob" for s in w.sent), "... og sender ingen addon-beskeder")
+    check(anna.cache(both.key) is None or not anna.recipe_ids(both.key),
+          "Anna får ingen recipes fra den stille kopi")
+    lua_errors(anna, both)
+
+
 if __name__ == "__main__":
     scenario_sync()
     scenario_relay()
@@ -1302,6 +1386,7 @@ if __name__ == "__main__":
     scenario_gathering()
     scenario_mainline()
     scenario_ux()
+    scenario_test_copy()
     print()
     if failures:
         print(f"{len(failures)} FEJL")

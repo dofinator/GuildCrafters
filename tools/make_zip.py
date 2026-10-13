@@ -25,6 +25,8 @@ def main():
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
         for folder, _, files in os.walk(ADDON):
             for name in sorted(files):
+                if name == "GuildCraftersTest.toc":     # testudgavens .toc skal ikke med ud
+                    continue
                 path = os.path.join(folder, name)
                 z.write(path, os.path.relpath(path, ROOT).replace(os.sep, "/"))
                 count += 1

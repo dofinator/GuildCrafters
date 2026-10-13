@@ -362,7 +362,14 @@ for _, c in ipairs({ "WARRIOR", "PALADIN", "HUNTER", "ROGUE", "PRIEST", "SHAMAN"
     LOCALIZED_CLASS_NAMES_MALE[c] = c:sub(1, 1) .. c:sub(2):lower()
 end
 
-C_AddOns = { GetAddOnMetadata = function(_, field) return field == "Version" and sim_version or nil end }
+-- sim_addon er mappenavnet, addonen indlæses under ("GuildCrafters" eller testudgaven "GuildCraftersTest");
+-- sim_loaded er andre addons, der allerede er indlæst. Begge sættes fra Python før denne fil køres.
+sim_addon = sim_addon or "GuildCrafters"
+sim_loaded = sim_loaded or {}
+C_AddOns = {
+    GetAddOnMetadata = function(_, field) return field == "Version" and sim_version or nil end,
+    IsAddOnLoaded = function(name) return sim_loaded[name] or false end,
+}
 
 ------------------------------------------------------------------------
 -- Spiller, guild og talents (fra sim_me)
@@ -724,12 +731,12 @@ local function Dump(v, indent)
 end
 function sim_dump(v) return Dump(v) end
 function sim_load_sv(text)
-    if text and text ~= "" then GuildCraftersDB = loadstring("return " .. text)() end
+    if text and text ~= "" then _G[sim_addon .. "DB"] = loadstring("return " .. text)() end
 end
 
 -- Indlæser en addon-fil med (addonName, ns) som varargs, ligesom WoW.
 function sim_load_file(path, code, ns)
     local chunk, err = loadstring(code, "@" .. path)
     if not chunk then error(err) end
-    chunk("GuildCrafters", ns)
+    chunk(sim_addon, ns)
 end

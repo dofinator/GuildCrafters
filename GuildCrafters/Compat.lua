@@ -6,6 +6,7 @@ local Compat = {}
 ns.Compat = Compat
 
 Compat.GetAddOnMetadata = (C_AddOns and C_AddOns.GetAddOnMetadata) or GetAddOnMetadata
+Compat.IsAddOnLoaded = (C_AddOns and C_AddOns.IsAddOnLoaded) or IsAddOnLoaded or function() return false end
 
 -- To klient-familier: Classic-klienterne (TBC Anniversary, Classic Era) med de gamle globale funktioner,
 -- og Mainline-klienten (retail og WoW Forever, interface 16001), hvor de er fjernet og erstattet af

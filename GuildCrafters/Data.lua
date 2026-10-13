@@ -4,8 +4,8 @@ local Data = {}
 ns.Data = Data
 
 function Data:Init()
-    local db = GuildCraftersDB or {}
-    GuildCraftersDB = db
+    local db = _G[ns.DB_NAME] or {}
+    _G[ns.DB_NAME] = db
     db.schema = db.schema or ns.DB_SCHEMA
     db.settings = db.settings or {}
     db.settings.minimap = db.settings.minimap or {}

@@ -173,7 +173,7 @@ local function CreateMainFrame()
         title = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
         title:SetPoint("TOP", 0, -5)
     end
-    title:SetText("GuildCrafters")
+    title:SetText(ns.IS_TEST and "GuildCrafters |cffff8000[TEST]|r" or "GuildCrafters")
 
     -- ESC lukker vinduet.
     table.insert(UISpecialFrames, "GuildCraftersFrame")
