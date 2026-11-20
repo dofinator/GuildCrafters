@@ -663,6 +663,14 @@ function sim_deliver(prefix, text, channel, sender)
     if prefixes[prefix] then sim_fire("CHAT_MSG_ADDON", prefix, text, channel, sender) end
 end
 
+-- Chatlinjer (fx svaret på "!craft"): sim.py leverer dem som CHAT_MSG_GUILD / CHAT_MSG_WHISPER.
+sim_chatSent = {}
+function SendChatMessage(text, chatType, lang, target)
+    assert(type(text) == "string" and #text <= 255, "chatlinje over 255 bytes")
+    table.insert(sim_chatSent, { text = text, chatType = chatType, target = target })
+    sim_py_chat(text, chatType, target)
+end
+
 ------------------------------------------------------------------------
 -- Mainline-profil (retail / WoW Forever): sim_flavor == "mainline"
 -- De gamle Classic-globaler fjernes, og C_-navnerummene, der erstatter dem, tilføjes. Listen over,
@@ -679,6 +687,8 @@ if sim_flavor == "mainline" then
     sim_lockdown = false
     C_ChatInfo.InChatMessagingLockdown = function() return sim_lockdown end
     C_ChatInfo.AreOutgoingAddonChatMessagesRestricted = function() return sim_lockdown end
+    -- Retail 11.2+: SendChatMessage ligger i C_ChatInfo.
+    C_ChatInfo.SendChatMessage, SendChatMessage = SendChatMessage, nil
 
     -- Items og spells
     C_Item = {

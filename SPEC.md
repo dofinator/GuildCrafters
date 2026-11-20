@@ -67,6 +67,7 @@ GuildCrafters/
   Sync.lua         HELLO/INVR/REQ/DATA/GBANK, jitter, relay, online-status
   Mats.lua         scan af tasker, bank og guild bank, opt-in
   Index.lua        opslag: hvem crafter hvad, hvem har hvilke mats
+  Answer.lua       svar på "!craft <item>" i guild-chatten og whispers (fra v0.16)
   Tooltip.lua      "Crafted by" og "Guild has"
   UI/Frame.lua     vindue, faner, fælles hjælpere (ikoner, farver)
   UI/List.lua      liste med to linjer pr. række, søgefelt, whisper-menu
@@ -206,6 +207,7 @@ GuildCraftersDB = {
 | `REQ` | `c` (char), `k` (type), `h` (version vi har) | 0,5–3 s efter at en `HELLO`/`INVR` viser en nyere version. Droppes, hvis en anden har bedt om det samme |
 | `DATA` | `c`, `k`, `v`, `d` (payload) | Som svar på `REQ`: ejeren efter 0,2–1 s, egne alts efter 0,5–1,5 s, relay (kun for offline chars) efter 2–6 s |
 | `GBANK` | `s` (scan-tid), `d` (faner) | 5 s efter et ændret guild bank-scan, og når en `HELLO` viser, at afsenderen har en ældre guild bank |
+| `ANS` | `a` (spørgsmålet: afsender + tekst med små bogstaver) | Fra v0.16, `ALERT`: lige før vi svarer på "!craft" i guild-chatten, så de andre dropper deres svar (se §8a). Ældre klienter ignorerer den |
 
 **Regler**
 - **Login-storm:** Alle forsinkelser er tilfældige (jitter). Der er højst én aktiv `REQ` pr.
@@ -457,6 +459,33 @@ layoutet ud fra mockups: én linje pr. recipe, filterlinje med "Usable items" og
 - **Kendt begrænsning:** Recipe-, pattern- og formula-items kan ikke mappes til deres produkt via API'et.
   Det løses med en lille statisk tabel senere, eller udelades.
 
+## 8a. "!craft <item>" i chatten (fra v0.16)
+
+Ønsket af en spiller på CurseForge. Ikke "!gc": en anden addon svarer allerede på det, og så ville
+guilden få to svar. Format valgt af brugeren ud fra mockups (én linje, online før offline):
+
+```
+[Guild] Upn: !craft titans
+[Guild] Pepsi: [Flask of the Titans]: online Anna, Bob - offline Carl, Dave +2
+[Guild] Pepsi: 3 matches: Flask of the Titans, Flask of Supreme Power, Flask of Pure Death. Be more specific.
+[Guild] Pepsi: Nobody with GuildCrafters can craft "dragonscale cloak".
+```
+
+- Linjen skal starte med `!craft` (store/små bogstaver er ligegyldige). Et item- eller enchant-link
+  slås op på ID og genbruges i svaret; tekst matcher recipe-navne (præcist navn først, ellers alle ord).
+  Højst 5 navne + "+N", højst 3 navne ved flere træf, aldrig over 255 bytes. Testfigurer fra
+  `/gc debug fake` kommer aldrig med.
+- **Kun én svarer:** alle online addon-brugere i guilden sorteres efter navn; hver venter
+  1 s + 1,5 s pr. plads foran sig (+ op til 0,5 s jitter). Den, der svarer, sender `ANS` før chatlinjen,
+  og de andre dropper deres svar. Er den første i kamp eller har slået svar fra, svarer den næste.
+  Samme spørgsmål fra samme spiller besvares kun én gang inden for 15 s.
+- **Whisper:** "!craft <item>" som whisper til en med addonen giver svaret som whisper, kun til
+  guild-medlemmer. Kommer den i kamp, svares der efter kampen.
+- `/gc answer on|off` (gemt i `settings.answer`, til som standard): fra = man svarer aldrig selv.
+- Chatlinjen sendes med `Compat.SendChat` (`C_ChatInfo.SendChatMessage` på Retail, ellers
+  `SendChatMessage`), i `pcall`. Om Mainline/Forever tillader addons at sende i guild-chatten, er
+  ikke set i spillet endnu.
+
 ## 9. Mats-deling
 
 - Kun crafting-mats tæller med: `GetItemInfo` classID Trade Goods (7) eller Reagent (5), og i TBC
@@ -514,6 +543,8 @@ layoutet ud fra mockups: én linje pr. recipe, filterlinje med "Usable items" og
     indlæst; roster kun med online-medlemmer; lukket overskrift i Skills; to ugers pause), kamp og
     encounter-lockdown (også rækkefølgen af beskeder lige efter kampen), `/gc tooltip`, `/gc sync`,
     statuslinjen og sikringerne omkring oprydning (scenarie 23)
+  - fra v0.16.0: "!craft" i guild-chatten og som whisper, kun én svarer, også med en 0.15-klient i
+    guilden (scenarie 25)
   - `python tools/sim/loadtest.py` måler én klient i en guild med 600 medlemmer (10 eller 200 med
     addonen): roster, søgning, tooltip, store payloads og login. Kører ikke i CI.
   

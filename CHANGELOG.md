@@ -1,6 +1,12 @@
 # GuildCrafters 0.16.0
 
-Small changes that make the window easier to read. Nothing to set up.
+Ask the guild chat who can craft something, and small changes that make the window easier to read. Nothing to set up.
+
+## New
+
+- Type **!craft** and an item name in guild chat, for example `!craft flask of the titans`, or shift-click the item after `!craft `. One player with GuildCrafters answers in guild chat with who can craft it, online players first. Guild members without the addon can ask too.
+- Whisper `!craft <item>` to someone with GuildCrafters to get the answer as a whisper instead.
+- `/gc answer off` stops your character from answering; someone else with the addon answers instead.
 
 ## Changed
 

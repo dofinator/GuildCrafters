@@ -144,6 +144,24 @@ function Compat.Whisper(key, message)
     end
 end
 
+-- Sender en chatlinje ("GUILD" eller "WHISPER" til key). Retail har flyttet funktionen til C_ChatInfo
+-- (11.2). pcall: hvis klienten spærrer chat fra addons (fx under en encounter), må det ikke give en fejl.
+-- Ikke set i en Mainline-klient endnu.
+function Compat.SendChat(text, chatType, key)
+    local send = (C_ChatInfo and C_ChatInfo.SendChatMessage) or SendChatMessage
+    if not send then return false end
+    return (pcall(send, text, chatType, nil, key and Compat.ChatName(key) or nil))
+end
+
+-- Første item- eller enchant-link i en chattekst: "i", itemID eller "e", spellID (nil uden link).
+-- Enchant-recipes er "enchant:"-links i Classic og "spell:"-links på Mainline.
+function Compat.LinkRecipe(text)
+    local id = text:match("|Hitem:(%d+)")
+    if id then return "i", tonumber(id) end
+    id = text:match("|Henchant:(%d+)") or text:match("|Hspell:(%d+)")
+    if id then return "e", tonumber(id) end
+end
+
 -- Indsætter et link i den åbne chatboks (shift-klik).
 local insertingOwnLink = false
 function Compat.InsertLink(link)

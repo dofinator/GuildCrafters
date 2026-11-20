@@ -22,6 +22,8 @@ i guilden, så der er ingen server.
 | Craft List | Dine ønsker, hver med crafter og mats: hvad du skal bruge, hvad du selv har, og hvem i guilden der har resten. "Ready" når du har det hele |
 | Tooltip | Hold musen over et item: "Crafted by ..." og "Guild has: ..." |
 | `/gc mats on` | Del dine crafting-mats med guilden (fra som standard) |
+| `!craft <item>` | Skriv det i guild-chatten (eller whisper det til en med addonen), så svarer addonen med, hvem der kan crafte det. Virker også med et shift-klikket item |
+| `/gc answer on\|off` | Slå automatiske svar på `!craft` fra eller til for dig selv (til som standard; andre svarer stadig) |
 | `/gc tooltip on\|off` | Slå "Crafted by" og "Guild has" på item-tooltips til eller fra |
 | `/gc sync` | Bed guilden om nye data nu. Statuslinjen nederst til højre i vinduet viser, hvornår der sidst kom noget |
 | `/gc role tank\|healer\|dps\|auto` | Ret din rolle, hvis gættet er forkert |

@@ -110,6 +110,7 @@ class World:
         self.sent = []       # log af alle beskeder: (tid, afsender, type-hint, bytes)
         self.ghosts = []     # guild-medlemmer uden addon: (navn, level, class, online)
         self.loss = 0.0      # andel af guild-beskeder, serveren taber for alle (tilfældigt)
+        self.chat_log = []   # chatlinjer: (tid, afsender, "GUILD"/"WHISPER", modtager, tekst)
         self.rng = random.Random(7)
 
     def roster(self):
@@ -138,6 +139,20 @@ class World:
         for r in receivers:
             self.queue.append((self.now + 0.1, r, prefix, text, channel, sender.key))
 
+    def chat(self, sender_key, guild, text, chat_type, target=None):
+        """En chatlinje fra en spiller (med eller uden addon) til guild-chatten eller som whisper."""
+        self.chat_log.append((self.now, sender_key.split("-")[0], chat_type, target, text))
+        if chat_type == "GUILD":
+            receivers = [c for c in self.clients if c.online and c.guild == guild]
+            event = "CHAT_MSG_GUILD"
+        elif chat_type == "WHISPER":
+            receivers = [c for c in self.clients if c.online and c.name == target.split("-")[0]]
+            event = "CHAT_MSG_WHISPER"
+        else:
+            receivers = []
+        for r in receivers:
+            self.queue.append((self.now + 0.1, r, None, text, event, sender_key))
+
     def step(self, seconds, dt=0.1):
         end = self.now + seconds
         while self.now < end:
@@ -145,7 +160,9 @@ class World:
             due = [m for m in self.queue if m[0] <= self.now]
             self.queue = [m for m in self.queue if m[0] > self.now]
             for _, client, prefix, text, channel, sender in due:
-                if client.online:
+                if client.online and prefix is None:        # chatlinje (se chat)
+                    client.L.globals().sim_fire(channel, text, sender)
+                elif client.online:
                     client.L.globals().sim_deliver(prefix, text, channel, sender)
             for c in self.clients:
                 if c.online:
@@ -182,6 +199,7 @@ class Client:
         g.sim_py_epoch = lambda: world.epoch
         g.sim_locale = locale
         g.sim_py_send = lambda p, t, ch, tg: world.send(self, p, t, ch, tg)
+        g.sim_py_chat = lambda t, ch, tg: world.chat(self.key, self.guild, t, ch, tg)
         g.sim_py_print = self._print
         g.sim_version = toc_version(self.base)
         g.sim_flavor = flavor
@@ -2355,6 +2373,94 @@ def scenario_ux2():
     lua_errors(mia, ben)
 
 
+def scenario_craft_chat():
+    print("\nScenarie 25: !craft <item> i guild-chatten og som whisper")
+    w = World()
+    w.ghosts = [("Upn", 30, "WARRIOR", True)]      # spørger uden addon
+    upn = f"Upn-{REALM}"
+    anna = _player(w, "Anna", [ALCH])
+    bob = _player(w, "Bob", [TAIL], flavor="mainline")
+    cara = _player(w, "Cara", [ENCH])
+    old = _player(w, "Olga", [], source="v0.15.0")  # den udgivne version kender ikke ANS
+    for c in (anna, bob, cara, old):
+        _join(w, c, 2)
+    w.step(120)
+
+    def ask(text, wait=15, target=None):
+        start = len(w.chat_log)
+        w.chat(upn, GUILD, text, "WHISPER" if target else "GUILD", target)
+        w.step(wait)
+        return [(who, kind, tgt, t) for _, who, kind, tgt, t in w.chat_log[start + 1:]]
+
+    replies = ask("!craft titans")
+    check(len(replies) == 1 and replies[0][0] == "Anna" and replies[0][1] == "GUILD",
+          f"Én svarer i guild-chatten, den første efter navn ({replies})")
+    check(replies and replies[0][3].endswith("[Flask of the Titans]|h|r: online Anna"),
+          f"Svaret er linket og crafteren ({replies and replies[0][3]})")
+
+    replies = ask("!craft titans")
+    check(replies == [], f"Samme spørgsmål lige efter besvares ikke igen ({replies})")
+
+    replies = ask("!CRAFT  Bracer")
+    check(len(replies) == 1 and replies[0][3] == "2 matches: Enchant Bracer - Lesser Deflection, "
+          "Enchant Bracer - Minor Health. Be more specific.", f"Flere recipes passer ({replies})")
+
+    replies = ask("!craft dragonscale cloak")
+    check([r[3] for r in replies] == ['Nobody with GuildCrafters can craft "dragonscale cloak".'],
+          f"Ingen kan crafte det ({replies})")
+
+    link = "|cffffffff|Hitem:2568::::::::|h[Brown Linen Vest]|h|r"
+    replies = ask("!craft " + link)
+    check([r[3] for r in replies] == [link + ": online Bob"], f"Et item-link i spørgsmålet ({replies})")
+
+    replies = ask("!craft bolt of linen cloth")
+    check([r[3] for r in replies] == ["|cffffffff|Hitem:2996::::::::|h[Bolt of Linen Cloth]|h|r: online Bob"],
+          f"Hele navnet passer præcis ({replies})")
+
+    for text in ("!craft", "!crafting titans", "can someone !craft titans", "craft titans"):
+        check(ask(text, 10) == [], f"Ingen svar på {text!r}")
+
+    anna.slash("answer off")
+    replies = ask("!craft healing potion")
+    check([(r[0], r[3]) for r in replies] == [("Bob", "|cffffffff|Hitem:13446::::::::|h[Major Healing Potion]|h|r: online Anna")],
+          f"Med /gc answer off svarer den næste (Bob, Mainline) ({replies})")
+    anna.slash("answer on")
+
+    anna.combat(True)
+    replies = ask("!craft minor health")
+    check([r[0] for r in replies] == ["Bob"], f"Den første i rækken er i kamp: den næste svarer ({replies})")
+    anna.combat(False)
+    w.step(10)
+
+    # Whisper: svaret kommer som whisper, kun til guild-medlemmer.
+    replies = ask("!craft linen vest", 5, target=cara.key)
+    check(replies == [("Cara", "WHISPER", "Upn", "|cffffffff|Hitem:2568::::::::|h[Brown Linen Vest]|h|r: online Bob")],
+          f"Whisper giver svaret som whisper ({replies})")
+    replies = ask("!craft", 5, target=cara.key)
+    check([r[3] for r in replies] == ["Usage: !craft <item name or link>"], f"Tom whisper giver en hjælpelinje ({replies})")
+    start = len(w.chat_log)
+    w.chat(f"Stranger-{REALM}", None, "!craft titans", "WHISPER", cara.key)
+    w.step(5)
+    check(len(w.chat_log) == start + 1, "Whisper fra en uden for guilden besvares ikke")
+    cara.combat(True)
+    replies = ask("!craft deflection", 5, target=cara.key)
+    check(replies == [], "Whisper i kamp venter ...")
+    cara.combat(False)
+    w.step(2)
+    check(len(w.chat_log) and w.chat_log[-1][1] == "Cara" and "online Cara" in w.chat_log[-1][4],
+          f"... og besvares efter kampen ({w.chat_log[-1]})")
+
+    # Offline crafters står efter de online, og testfigurer kommer aldrig i chatten.
+    anna.logout()
+    w.step(30)
+    bob.slash("debug fake 15")
+    replies = ask("!craft titans")
+    check([(r[0], r[3]) for r in replies] == [("Bob", "|cffffffff|Hitem:13510::::::::|h[Flask of the Titans]|h|r: offline Anna")],
+          f"Offline crafter, svaret af den næste online ({replies})")
+    check(all(len(t) <= 255 for _, _, _, _, t in w.chat_log), "Alle chatlinjer er højst 255 bytes")
+    lua_errors(anna, bob, cara, old)
+
+
 if __name__ == "__main__":
     scenario_sync()
     scenario_relay()
@@ -2379,6 +2485,7 @@ if __name__ == "__main__":
     scenario_status()
     scenario_review()
     scenario_ux2()
+    scenario_craft_chat()
     print()
     if failures:
         print(f"{len(failures)} FEJL")

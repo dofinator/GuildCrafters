@@ -22,6 +22,13 @@ function ns.Plain(text)
     return (text:gsub("|", "||"))
 end
 
+-- Chattekst uden links og farvekoder: "[Flask of the Titans]" bliver til "Flask of the Titans".
+function ns.StripLinks(text)
+    text = text:gsub("|H.-|h%[(.-)%]|h", "%1"):gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|cn.-:", "")
+        :gsub("|r", "")
+    return (text:gsub("^%s+", ""):gsub("%s+$", ""))
+end
+
 -- Kalder fn, men en fejl i ét modul må ikke stoppe de andre (fx minimap-knappen ved login).
 -- Fejlen vises stadig i WoW's normale fejlvindue.
 local function SafeCall(fn, ...)
@@ -121,9 +128,6 @@ SlashCmdList.GUILDCRAFTERS = function(msg)
     else
         -- Alt andet er en søgning i Crafting: "/gc flask". Et shift-klikket item ("/gc [Flask of the
         -- Titans]") bliver til sit navn.
-        local text = msg:gsub("|H.-|h%[(.-)%]|h", "%1"):gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|cn.-:", "")
-            :gsub("|r", "")
-        text = text:gsub("^%s+", ""):gsub("%s+$", "")
-        ns.UI.SearchRecipes(text)
+        ns.UI.SearchRecipes(ns.StripLinks(msg))
     end
 end
