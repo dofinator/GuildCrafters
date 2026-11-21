@@ -286,6 +286,7 @@ local function Build(content)
     local top = -BAR_HEIGHT - HEADER_HEIGHT
     local height = UI.CONTENT_HEIGHT + top - UI.FOOTER_HEIGHT - 4
     scroll = CreateFrame("ScrollFrame", "GuildCraftersMatsScroll", content, "FauxScrollFrameTemplate")
+    UI.CtrlWheel(scroll)      -- Ctrl+hjul: vinduets størrelse
     scroll:SetPoint("TOPLEFT", 0, top)
     scroll:SetPoint("RIGHT", content, "RIGHT", -26, 0)
     scroll:SetHeight(height)

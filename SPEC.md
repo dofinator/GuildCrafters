@@ -312,6 +312,10 @@ med spillets egne knapper, skrifttyper og scrollbars. Der er ingen egen grafik.
 
 **Opførsel:**
 - Vinduet kan flyttes, og positionen huskes.
+- **Størrelse (fra v0.17.0, valgt af brugeren ud fra mockups):** `/gc scale 1.2` (0.8–1.5; "120" betyder
+  120 %; uden tal tilbage til 100 %) eller Ctrl+musehjul over vinduet i trin på 10 %. Uden Ctrl gør hjulet
+  det, det plejer (listerne scroller). Gemt i `settings.scale`; trackeren følger med. Positionen regnes om,
+  så vinduet ikke hopper.
 - ESC lukker det (`UISpecialFrames`).
 - Den sidst valgte fane huskes.
 
@@ -368,6 +372,16 @@ layoutet ud fra mockups: én linje pr. recipe, filterlinje med "Usable items" og
 - "x2" i grøn foran `[+]` betyder, at recipen står på ens craft-liste (tooltippen siger det også).
 - **Usable items** (som i AH): kun det, ens level kan bruge. **Reset** rydder søgning, flueben og valgt
   kategori/person; sorteringen bliver.
+- **By profession (fra v0.17.0, valgt af brugeren ud fra mockups):** punkt i venstre kolonne lige over
+  "By crafter". Til højre én række pr. profession med kolonnerne **Profession | Crafters | Best | Online**
+  (sorterbare; standard flest crafters først). Også professions, ingen i guilden har ("nobody in the
+  guild"), så man kan se hullerne; fodlinjen nævner dem. Klik folder crafterne ud (online først, så
+  højeste skill) med "300/300" og online/offline; klik på en crafter viser deres recipes, højreklik giver
+  "Show recipes" og "Whisper". Søgefeltet matcher profession- eller personnavn (et træf på en person
+  folder professionen ud), og "Online crafters only" tæller kun dem, der er online. Gathering-professions
+  er med, selvom de ikke har recipes.
+- **Post crafters to guild chat (fra v0.17.0):** i højreklik-menuen på en recipe her og på et item i
+  Craft List. Poster samme linje som svaret på "!craft" (§8a).
 - Shift-klik på et item i taskerne eller et link i chatten, mens chatboksen er lukket, sætter itemets
   navn i søgefeltet (som i AH). Det samme gælder Mats-fanens søgefelt. Efter-hook på
   `ChatEdit_InsertLink` (`Compat.HookLinkInsert`); spillet åbner selv "split stack" for stakke, og det
@@ -435,6 +449,11 @@ layoutet ud fra mockups: én linje pr. recipe, filterlinje med "Usable items" og
 - Items, der er Ready, er foldet sammen til én linje, så det, man mangler, står tydeligt. `+`/`-`-knappen
   foran itemet folder ud/ind (huskes resten af sessionen).
 - `[-] [+]` ændrer antal med 1, shift-klik med 5 (shift-minus går ikke under 1). "Clear list" spørger først.
+- **Tracker (fra v0.17.0, valgt af brugeren ud fra mockups):** knappen "Tracker" (og `/gc tracker`) åbner
+  et lille vindue i tooltip-stil, "Still to get", med de mats, listen mangler i alt, have/need ("0/1" med
+  rødt). Højst 10 rækker + "+N more". Kan flyttes (`settings.trackerPos`), bliver stående, når
+  hovedvinduet lukkes, og åbner igen ved login (`settings.tracker`). Når alt er samlet, lukker det sig
+  selv med én linje i chatten. Opdateres ved taskeændringer, data fra guilden og item-navne.
 
 **Mats** (fra v0.16.0 i samme stil som Crafting, valgt af brugeren ud fra en før/efter-skitse):
 - Én linje pr. mat med kolonnerne **Name** og **Who has it**: "Garrosh 129, Uther 3 +1 · Guild bank 200"
@@ -550,6 +569,8 @@ offline):
     statuslinjen og sikringerne omkring oprydning (scenarie 23)
   - fra v0.16.0: "!craft" i guild-chatten og som whisper, kun én svarer, også med en 0.15-klient i
     guilden (scenarie 25)
+  - fra v0.17.0: By profession, Post crafters to guild chat, `/gc scale` + Ctrl+hjul og trackeren
+    (scenarie 26)
   - `python tools/sim/loadtest.py` måler én klient i en guild med 600 medlemmer (10 eller 200 med
     addonen): roster, søgning, tooltip, store payloads og login. Kører ikke i CI.
   

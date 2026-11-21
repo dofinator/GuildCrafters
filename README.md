@@ -19,12 +19,15 @@ i guilden, så der er ingen server.
 | `/gc` eller minimap-knappen | Åbn vinduet (Roster, Crafting, Craft List, Mats) |
 | `/gc flask` | Søg direkte i Crafting. Shift-klik et item efter `/gc ` for at søge på dets navn |
 | Crafting | Bygget som auktionshuset: kategorier til venstre, kolonner (Name, Lvl, Crafters) du kan sortere ved klik, og søgning på navn eller stats ("stamina", "fire res"). Shift-klik et item i taskerne for at søge på det. `+` tilføjer til din liste. Højreklik: whisper en crafter. Ctrl-klik: prøv det på. Shift-klik: link i chatten |
-| Craft List | Dine ønsker, hver med crafter og mats: hvad du skal bruge, hvad du selv har, og hvem i guilden der har resten. "Ready" når du har det hele |
+| Craft List | Dine ønsker, hver med crafter og mats: hvad du skal bruge, hvad du selv har, og hvem i guilden der har resten. "Ready" når du har det hele. "Tracker" åbner et lille vindue med det, du stadig mangler |
+| By profession | I Crafting: hver profession med antal crafters, højeste skill og hvem der er online, også dem ingen i guilden har |
 | Tooltip | Hold musen over et item: "Crafted by ..." og "Guild has: ..." |
 | `/gc mats on` | Del dine crafting-mats med guilden (fra som standard) |
 | `!craft <item>` | Skriv det i guild-chatten (eller whisper det til en med addonen), så svarer addonen med, hvem der kan crafte det. Virker også med et shift-klikket item |
 | `/gc answer on\|off` | Slå automatiske svar på `!craft` fra eller til for dig selv (til som standard; andre svarer stadig) |
 | `/gc tooltip on\|off` | Slå "Crafted by" og "Guild has" på item-tooltips til eller fra |
+| `/gc scale 1.2` | Gør vinduet større eller mindre (Ctrl + musehjul over vinduet virker også) |
+| `/gc tracker` | Det lille vindue med de mats, din craft-liste mangler |
 | `/gc sync` | Bed guilden om nye data nu. Statuslinjen nederst til højre i vinduet viser, hvornår der sidst kom noget |
 | `/gc role tank\|healer\|dps\|auto` | Ret din rolle, hvis gættet er forkert |
 | `/gc main <navn>` | Vælg hvilken af dine chars, der er din main |

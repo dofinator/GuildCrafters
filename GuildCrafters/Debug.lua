@@ -236,6 +236,14 @@ local TOUR_STEPS = {
         end
         Click(Need(FindChild(t.content, CategoryRow("crafter")), "crafter under \"By crafter\""))
     end },
+    { "crafting-by-profession", function(t)
+        Click(Need(FindChild(t.content, CategoryRow("profs")), "\"By profession\" category"))
+    end },
+    { "by-profession-open", function(t)
+        Click(Need(FindChild(t.content, function(f)
+            return f.profRow ~= nil and f.profRow.count > 0 and not f.profRow.open and f:IsVisible()
+        end), "profession with crafters"))
+    end },
     { "search-flask", function(t)
         CraftingReset(t)
         Search("GuildCraftersCraftingSearch", "flask")
@@ -274,6 +282,14 @@ local TOUR_STEPS = {
             Click(row.toggle)
         end
         Hover(Need(MaterialRow(), "material row"))
+    end },
+    { "tracker", function()
+        GameTooltip:Hide()
+        ns.UI.ShowTracker(true)
+        Need(GuildCraftersTracker and GuildCraftersTracker:IsShown(), "tracker window")
+    end },
+    { "scale-120", function()
+        ns.UI.SetScale(1.2)
     end },
     { "mats", function(t) Tab(t, "Mats") end },
     { "mats-tooltip", function(t)
@@ -320,6 +336,8 @@ local function FinishTour()
     for _, e in ipairs(t.savedCraftList) do table.insert(ns.db.craftList, e) end
     ns:Fire("CRAFTLIST_CHANGED")
     xpcall(function() t.report.tabs = TabGeometry() end, RecordError)
+    xpcall(ns.UI.SetScale, RecordError, t.savedScale)
+    if not t.savedTracker then xpcall(ns.UI.ShowTracker, RecordError, false) end
     xpcall(Search, RecordError, "GuildCraftersCraftingSearch", "")
     if t.savedTab then xpcall(ns.UI.SelectTab, RecordError, ns.UI, t.savedTab) end
     SetScreenshotMessage(true)
@@ -367,6 +385,8 @@ local function StartTour()
         index = 0,
         savedCraftList = saved,
         savedTab = ns.UI:CurrentTab(),
+        savedScale = ns.UI.Scale(),
+        savedTracker = ns.db.settings.tracker,
         oldHandler = geterrorhandler(),
         report = {
             version = ns.VERSION, client = (GetBuildInfo()), started = date("%Y-%m-%d %H:%M:%S"),

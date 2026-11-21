@@ -874,7 +874,7 @@ def scenario_tour():
         return
     steps = [s.name for _, s in report.steps.items()]
     errors = [f"{e.step}: {e.msg}" for _, e in report.errors.items()]
-    check(len(steps) == 16 and report.shotsOk == 16, f"16 trin med screenshot ({len(steps)} trin, {report.shotsOk} screenshots)")
+    check(len(steps) == 20 and report.shotsOk == 20, f"20 trin med screenshot ({len(steps)} trin, {report.shotsOk} screenshots)")
     check(not errors, "Ingen fejl under rundturen" + (f" ({errors[0]})" if errors else ""))
     check(not any("added to your craft list" in p for p in bob.prints), "Ingen chat-linje for hver recipe, der lægges på listen")
     cl = [(e.kind, e.id, e.qty) for _, e in bob.g.GuildCraftersDB.craftList.items()]
@@ -1145,8 +1145,8 @@ def scenario_mainline():
     w.step(70)
     report = bob.g.GuildCraftersDB.debugTour
     errors = [f"{e.step}: {e.msg}" for _, e in report.errors.items()] if report else ["ingen rapport"]
-    check(report is not None and len(list(report.steps.items())) == 16 and not errors,
-          "Rundturen gennem alle faner (16 trin) uden fejl" + (f" ({errors[0]})" if errors else ""))
+    check(report is not None and len(list(report.steps.items())) == 20 and not errors,
+          "Rundturen gennem alle faner (20 trin) uden fejl" + (f" ({errors[0]})" if errors else ""))
 
     # Blokeret guild-kanal virker på samme måde.
     cara = Client(w, "Cara", "MAGE", 30, profs=[dict(ENCH)], flavor="mainline")
@@ -2481,6 +2481,217 @@ def scenario_craft_chat():
     lua_errors(anna, bob, cara, old)
 
 
+UI_HELPERS = r"""
+sim_h = {}
+-- Klik på en post i Crafting-fanens venstre kolonne (type = "profs", "all", ...).
+function sim_h.category(kind)
+    for _, f in ipairs(sim_allFrames) do
+        local e = rawget(f, "entry")
+        if e and e.type == kind and f:IsVisible() and f.sim_scripts.OnClick then
+            f.sim_scripts.OnClick(f)
+            return e.count
+        end
+    end
+end
+-- Synlige rækker i "By profession": "navn|crafters|best|online".
+function sim_h.profRows()
+    local out = {}
+    for _, f in ipairs(sim_allFrames) do
+        if rawget(f, "pcount") and f:IsVisible() and (rawget(f, "profRow") or rawget(f, "holder")) then
+            table.insert(out, table.concat({ f.label.sim_text or "", f.pcount.sim_text or "",
+                f.pbest.sim_text or "", f.ponline.sim_text or "" }, "|"))
+        end
+    end
+    return table.concat(out, "\n")
+end
+function sim_h.clickProf(name, button)
+    for _, f in ipairs(sim_allFrames) do
+        local p = rawget(f, "profRow")
+        if p and p.name == name and f:IsVisible() then f.sim_scripts.OnClick(f, button or "LeftButton") return true end
+    end
+end
+function sim_h.clickHolder(key, button)
+    sim_menu = nil
+    for _, f in ipairs(sim_allFrames) do
+        if rawget(f, "holder") == key and f:IsVisible() then f.sim_scripts.OnClick(f, button or "LeftButton") return true end
+    end
+end
+-- Højreklik på en item-række (Crafting: rawget "crafters"; Craft List: rawget "toggle") -> menuens tekster.
+function sim_h.menu(name, field)
+    sim_menu = nil
+    for _, f in ipairs(sim_allFrames) do
+        local item = rawget(f, "item")
+        if item and rawget(f, field) and f:IsVisible() and item.name == name then
+            f.sim_scripts.OnClick(f, "RightButton")
+            break
+        end
+    end
+    local out = {}
+    for _, info in ipairs(sim_menu or {}) do table.insert(out, info.text) end
+    return table.concat(out, ";")
+end
+function sim_h.pick(text)
+    for _, info in ipairs(sim_menu or {}) do
+        if info.text == text and info.func then info.func() return true end
+    end
+end
+-- Trackerens synlige rækker: "navn have/need".
+function sim_h.tracker()
+    local t = GuildCraftersTracker
+    if not t or not t:IsShown() then return nil end
+    local out = {}
+    for _, f in ipairs(sim_allFrames) do
+        if f.sim_parent == t and rawget(f, "count") and f:IsShown() then
+            table.insert(out, (f.name.sim_text or "") .. " " .. (f.count.sim_text or ""))
+        end
+    end
+    return table.concat(out, ";")
+end
+"""
+
+
+def scenario_ux3():
+    print("\nScenarie 26: UX-runde 0.17 - By profession, Post to guild chat, vinduets størrelse, tracker")
+    w = World()
+    me = Client(w, "Pepsi", "PRIEST", 34, profs=[dict(TAIL), dict(ENCH)], talents=(5, 31, 15),
+                bags={0: [(8925, 1)]})
+    anna = Client(w, "Anna", "DRUID", 60, profs=[ALCH], talents=(5, 31, 15))
+    bob = Client(w, "Bob", "WARRIOR", 60, profs=[TAIL], talents=(5, 5, 41))
+    w.clients = [me, anna, bob]
+    for c in (me, anna, bob):
+        c.login()
+    me.open_trade("Tailoring")
+    me.open_craft("Enchanting")
+    anna.open_trade("Alchemy")
+    bob.open_trade("Tailoring")
+    w.step(200)
+    ns, L, g = me.ns, me.L, me.g
+    L.execute(UI_HELPERS)
+    h = g.sim_h
+    rows = lambda: [_strip(r) for r in (h.profRows() or "").split("\n") if r]
+
+    # --- By profession ---
+    me.slash("")
+    ns.UI.ShowTab(ns.UI, "Crafting")
+    w.step(2)
+    count = h.category("profs")
+    w.step(1)
+    shown = rows()
+    check(count == 3, f"\"By profession\" står i venstre kolonne med antal professions ({count})")
+    check(shown[:3] == ["+ Tailoring|2|75|Bob, Pepsi", "+ Alchemy|1|300|Anna", "+ Enchanting|1|100|Pepsi"],
+          f"Flest crafters først, med højeste skill og hvem der er online ({shown[:3]})")
+    check("  Blacksmithing|0|-|nobody in the guild" in shown,
+          f"Professions, ingen i guilden har, står der også ({[r for r in shown if '|0|' in r]})")
+    footer = _strip(L.eval("""function()
+        for _, f in ipairs(sim_allFrames) do
+            local t = rawget(f, "sim_text")
+            if type(t) == "string" and t:find("in the guild ·", 1, true) and f:IsVisible() then return t end
+        end
+    end""")())
+    check(footer.startswith("3 professions in the guild · nobody has Blacksmithing"),
+          f"Fodlinjen siger, hvad ingen i guilden har ({footer[:70]})")
+    h.clickProf("Tailoring")
+    w.step(0.5)
+    shown = rows()
+    i = shown.index("- Tailoring|2|75|Bob, Pepsi") if "- Tailoring|2|75|Bob, Pepsi" in shown else -1
+    check(i >= 0 and shown[i + 1:i + 3] == ["Bob||75/75|online", "Pepsi||75/75|online"],
+          f"Klik folder crafterne ud med skill og online-status ({shown[i:i + 3] if i >= 0 else shown[:3]})")
+    h.clickHolder(bob.key, "RightButton")
+    menu = ";".join(info.text for _, info in g.sim_menu.items()) if g.sim_menu else ""
+    check("Show recipes" in menu and "Whisper Bob" in menu, f"Højreklik på en crafter giver en menu ({menu})")
+    h.clickHolder(bob.key)
+    w.step(0.5)
+    footer = _strip(L.eval("""function()
+        for _, f in ipairs(sim_allFrames) do
+            local t = rawget(f, "sim_text")
+            if type(t) == "string" and t:find("recipes · Bob", 1, true) and f:IsVisible() then return t end
+        end
+    end""")())
+    check(footer.startswith("2 recipes · Bob: Tailoring 75"), f"Klik på en crafter viser deres recipes ({footer})")
+    h.category("profs")
+    g.GuildCraftersCraftingSearch.SetText(g.GuildCraftersCraftingSearch, "anna")
+    w.step(0.5)
+    shown = rows()
+    check(shown == ["- Alchemy|1|300|Anna", "Anna||300/300|online"],
+          f"Søgning på en person viser deres profession foldet ud ({shown})")
+    g.GuildCraftersCraftingSearch.SetText(g.GuildCraftersCraftingSearch, "")
+    h.category("all")
+    w.step(0.5)
+
+    # --- Post crafters to guild chat ---
+    menu = h.menu("Flask of the Titans", "crafters")
+    check("Post crafters to guild chat" in menu, f"Recipe-menuen i Crafting har \"Post crafters to guild chat\" ({menu})")
+    start = len(w.chat_log)
+    h.pick("Post crafters to guild chat")
+    posted = [(who, kind, t) for _, who, kind, _, t in w.chat_log[start:]]
+    check(posted == [("Pepsi", "GUILD", "|cffffffff|Hitem:13510::::::::|h[Flask of the Titans]|h|r: online Anna")],
+          f"... og poster samme linje som !craft-svaret ({posted})")
+    w.step(15)
+    check(len(w.chat_log) == start + 1, "Ingen svarer på den postede linje")
+    ns.Data.CraftListAdd(ns.Data, "i", 13510, 1)
+    ns.UI.ShowTab(ns.UI, "Craft List")
+    w.step(2)
+    menu = h.menu("Flask of the Titans", "toggle")
+    check("Post crafters to guild chat" in menu, f"... og det samme i Craft List ({menu})")
+
+    # --- Vinduets størrelse ---
+    frame = g.GuildCraftersFrame
+    me.slash("scale 1.2")
+    check(abs(frame.GetScale(frame) - 1.2) < 1e-9 and me.prints[-1].endswith("Window scale: 120 %"),
+          f"/gc scale 1.2 ({frame.GetScale(frame)}, {me.prints[-1]})")
+    g.sim_ctrl = True
+    frame.sim_scripts.OnMouseWheel(frame, 1)
+    check(abs(frame.GetScale(frame) - 1.3) < 1e-9, f"Ctrl+hjul op: 10 % større ({frame.GetScale(frame)})")
+    for _ in range(10):
+        frame.sim_scripts.OnMouseWheel(frame, 1)
+    check(abs(frame.GetScale(frame) - 1.5) < 1e-9, f"Højst 150 % ({frame.GetScale(frame)})")
+    g.sim_ctrl = False
+    frame.sim_scripts.OnMouseWheel(frame, -1)
+    check(abs(frame.GetScale(frame) - 1.5) < 1e-9, "Hjulet uden Ctrl ændrer ikke størrelsen")
+    me.slash("scale 80")
+    check(abs(frame.GetScale(frame) - 0.8) < 1e-9, f"/gc scale 80 = 80 % ({frame.GetScale(frame)})")
+    me.slash("scale big")
+    check("Use /gc scale" in me.prints[-1], f"Forkert tal giver en hjælpelinje ({me.prints[-1]})")
+    me.slash("scale 1.1")
+
+    # --- Tracker ---
+    me.slash("tracker")
+    w.step(1)
+    t = _strip(h.tracker())
+    check(t == "Black Lotus 0/1", f"Trackeren viser det, der mangler, have/need ({t})")
+    check(abs(g.GuildCraftersTracker.GetScale(g.GuildCraftersTracker) - 1.1) < 1e-9,
+          "Trackeren følger vinduets størrelse")
+    me.ns.UI.Toggle(me.ns.UI)
+    check(h.tracker() is not None and not frame.IsShown(frame), "Trackeren bliver stående, når vinduet lukkes")
+    saved = me.logout()
+    check("tracker = true" in saved or '"tracker"' in saved or "tracker=true" in saved.replace(" ", ""),
+          "Trackeren huskes til næste login")
+    new = Client(w, "Pepsi", "PRIEST", 34, profs=[dict(TAIL), dict(ENCH)], talents=(5, 31, 15),
+                 bags={0: [(8925, 1)]}, saved=saved)
+    w.clients[w.clients.index(me)] = new
+    me = new
+    me.login()
+    w.step(20)
+    L, g = me.L, me.g
+    L.execute(UI_HELPERS)
+    h = g.sim_h
+    check(_strip(h.tracker()) == "Black Lotus 0/1", f"... og åbner igen efter login ({h.tracker()})")
+    me.prints.clear()
+    L.execute("sim_me.bags[0] = { { 8925, 1 }, { 13468, 1 } }")
+    g.sim_fire("BAG_UPDATE_DELAYED")
+    w.step(1)
+    check(h.tracker() is None and any("all the mats" in p for p in me.prints),
+          f"Når alt er samlet, lukker trackeren sig selv ({me.prints})")
+    me.prints.clear()
+    me.slash("tracker")
+    check(h.tracker() is None and any("all the mats" in p for p in me.prints),
+          "Er alt samlet, åbner /gc tracker ikke et tomt vindue")
+    me.ns.Data.CraftListClear(me.ns.Data)
+    me.slash("tracker")
+    check(h.tracker() is None and "craft list is empty" in me.prints[-1], f"Tom liste: en linje i chatten ({me.prints[-1]})")
+    lua_errors(me, anna, bob)
+
+
 if __name__ == "__main__":
     scenario_sync()
     scenario_relay()
@@ -2506,6 +2717,7 @@ if __name__ == "__main__":
     scenario_review()
     scenario_ux2()
     scenario_craft_chat()
+    scenario_ux3()
     print()
     if failures:
         print(f"{len(failures)} FEJL")

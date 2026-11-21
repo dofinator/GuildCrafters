@@ -129,6 +129,8 @@ function Methods:GetID() return self.sim_id or 0 end
 function Methods:CreateFontString() return NewWidget("FontString", nil, self) end
 function Methods:CreateTexture() return NewWidget("Texture", nil, self) end
 function Methods:GetEffectiveScale() return 1 end
+function Methods:SetScale(s) self.sim_scale = s end
+function Methods:GetScale() return rawget(self, "sim_scale") or 1 end
 function Methods:GetCenter() return 0, 0 end
 
 -- Tooltip

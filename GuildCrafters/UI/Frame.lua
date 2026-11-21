@@ -105,6 +105,72 @@ local function RestorePosition()
     end
 end
 
+------------------------------------------------------------------------
+-- Vinduets størrelse (fra v0.17, valgt af brugeren ud fra mockups): /gc scale 1.2 eller Ctrl+musehjul
+-- over vinduet, i trin på 10 %. Gælder også trackeren (UI/Tracker.lua).
+------------------------------------------------------------------------
+
+local SCALE_MIN, SCALE_MAX, SCALE_STEP = 0.8, 1.5, 0.1
+local scaled = {}           -- vinduer, der følger størrelsen: { frame, onMoved }
+
+function UI.Scale()
+    return ns.db and ns.db.settings.scale or 1
+end
+
+-- Skalerer et vindue uden at flytte det: positionen er i vinduets egen skala, så den regnes om.
+local function ApplyScale(f, scale)
+    local old = f:GetScale()
+    if not old or old <= 0 then old = 1 end
+    local point, rel, relPoint, x, y = f:GetPoint()
+    f:SetScale(scale)
+    if point and x and y then
+        f:ClearAllPoints()
+        f:SetPoint(point, rel, relPoint, x * old / scale, y * old / scale)
+    end
+end
+
+function UI.SetScale(scale)
+    scale = math.floor(math.max(SCALE_MIN, math.min(SCALE_MAX, scale)) * 10 + 0.5) / 10
+    ns.db.settings.scale = scale
+    for _, s in ipairs(scaled) do
+        ApplyScale(s.frame, scale)
+        if s.onMoved then s.onMoved() end
+    end
+    return scale
+end
+
+-- Et vindue følger /gc scale; onMoved gemmer positionen, efter at den er regnet om.
+function UI.FollowScale(f, onMoved)
+    f:SetScale(UI.Scale())
+    table.insert(scaled, { frame = f, onMoved = onMoved })
+end
+
+-- Ctrl+musehjul ændrer størrelsen; uden Ctrl gør hjulet det, det plejer (listerne scroller). Listerne
+-- fanger selv hjulet, så deres egen handler pakkes ind (UI.CtrlWheel kaldes, hvor de oprettes).
+function UI.CtrlWheel(f)
+    local original = f:GetScript("OnMouseWheel")
+    f:EnableMouseWheel(true)
+    f:SetScript("OnMouseWheel", function(self, delta)
+        if IsControlKeyDown() then
+            UI.SetScale(UI.Scale() + (delta > 0 and SCALE_STEP or -SCALE_STEP))
+        elseif original then
+            original(self, delta)
+        end
+    end)
+end
+
+ns:RegisterCommand("scale", function(arg)
+    arg = (arg or ""):gsub("%%", "")
+    local n = tonumber(arg)
+    if arg ~= "" and not n then
+        ns:Print("Use /gc scale 1.2 (from 0.8 to 1.5), or /gc scale to go back to normal.")
+        return
+    end
+    if n and n > 3 then n = n / 100 end     -- "/gc scale 120" betyder 120 %
+    local scale = UI.SetScale(n or 1)
+    ns:Print(string.format("Window scale: %d %%", math.floor(scale * 100 + 0.5)))
+end, "/gc scale [0.8-1.5] - window size (Ctrl + mouse wheel over the window works too)")
+
 function UI:SelectTab(index)
     currentTab = index
     ns.db.settings.lastTab = index
@@ -196,6 +262,8 @@ local function CreateMainFrame()
         self:StopMovingOrSizing()
         SavePosition()
     end)
+    UI.FollowScale(frame, SavePosition)
+    UI.CtrlWheel(frame)
     RestorePosition()
 
     local title = frame.TitleText
