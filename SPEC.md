@@ -461,8 +461,8 @@ layoutet ud fra mockups: én linje pr. recipe, filterlinje med "Usable items" og
 
 ## 8a. "!craft <item>" i chatten (fra v0.16)
 
-Ønsket af en spiller på CurseForge. Ikke "!gc": en anden addon svarer allerede på det, og så ville
-guilden få to svar. Format valgt af brugeren ud fra mockups (én linje, online før offline):
+Ønsket af en spiller på CurseForge. Format valgt af brugeren ud fra mockups (én linje, online før
+offline):
 
 ```
 [Guild] Upn: !craft titans
@@ -477,7 +477,12 @@ guilden få to svar. Format valgt af brugeren ud fra mockups (én linje, online 
   `/gc debug fake` kommer aldrig med.
 - **Kun én svarer:** alle online addon-brugere i guilden sorteres efter navn; hver venter
   1 s + 1,5 s pr. plads foran sig (+ op til 0,5 s jitter). Den, der svarer, sender `ANS` før chatlinjen,
-  og de andre dropper deres svar. Er den første i kamp eller har slået svar fra, svarer den næste.
+  og de andre dropper deres svar. Er den første i kamp, i en instance (dungeon, raid, battleground,
+  arena: guild-addon-beskeder kommer ikke altid frem der) eller har slået svar fra, svarer den næste.
+  Ser man en andens svar på samme spørgsmål i guild-chatten, dropper man også sit eget (sikring for et
+  tabt `ANS`). To svar er "det samme", når de handler om samme recipe (item-/enchant-ID eller navn foran
+  ": online"/": offline"), eller når "N matches"/"Nobody"-linjen er ens; navnene må gerne være
+  forskellige, fordi hver klient ser sin egen online-status.
   Samme spørgsmål fra samme spiller besvares kun én gang inden for 15 s.
 - **Whisper:** "!craft <item>" som whisper til en med addonen giver svaret som whisper, kun til
   guild-medlemmer. Kommer den i kamp, svares der efter kampen.

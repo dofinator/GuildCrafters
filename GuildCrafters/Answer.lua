@@ -1,14 +1,16 @@
 local _, ns = ...
 
 -- "!craft <item>" i guild-chatten (fra v0.16): én addon-bruger svarer i guild-chatten, hvem der kan
--- crafte det. Ønsket af en spiller på CurseForge. Ikke "!gc": en anden addon svarer allerede på det,
--- og så ville guilden få to svar. Format valgt af brugeren ud fra mockups:
+-- crafte det. Ønsket af en spiller på CurseForge. Format valgt af brugeren ud fra mockups:
 --   [Flask of the Titans]: online Anna, Bob - offline Carl, Dave +2
 --   3 matches: Flask of the Titans, Flask of Supreme Power, Flask of Pure Death. Be more specific.
 --   Nobody with GuildCrafters can craft "dragonscale cloak".
 -- Hvem svarer: alle online addon-brugere står i samme rækkefølge (sorteret efter navn), og hver venter
 -- STEP sekunder pr. plads foran sig. Den, der svarer, sender først ANS på addon-kanalen, så de andre
 -- dropper deres svar. En gammel klient (0.15 og før) kender ikke ANS og ignorerer den.
+-- Inde i dungeons og raids kommer guild-addon-beskeder ikke altid frem, så ANS kan gå tabt og give to
+-- svar. Derfor to sikringer mere: man svarer ikke selv inde i en instance, og ser man en andens svar
+-- på samme spørgsmål i guild-chatten, dropper man sit eget, også når ANS aldrig kom frem.
 -- Whisper "!craft <item>" til en med addonen giver svaret som whisper (kun fra guild-medlemmer).
 -- /gc answer off: man svarer aldrig selv (andre gør).
 local Answer = {}
@@ -21,7 +23,7 @@ local FIRST = 1          -- sekunder før den første svarer (item-navne når at
 local STEP = 1.5         -- ekstra sekunder pr. plads i rækkefølgen
 local REPEAT = 15        -- samme spørgsmål fra samme spiller besvares kun én gang inden for så mange sek.
 
-local pending = {}       -- [spørgsmål] = true: vi venter på vores tur
+local pending = {}       -- [spørgsmål] = teksten efter "!craft": vi venter på vores tur
 local answered = {}      -- [spørgsmål] = GetTime(): besvaret (af os eller en anden)
 local afterCombat = {}   -- whispers, der kom i kamp: { key, rest }
 
@@ -133,6 +135,31 @@ local function Recent(id)
     return answered[id] and GetTime() - answered[id] < REPEAT
 end
 
+-- Hvad et svar handler om, så to svar på samme spørgsmål kan genkendes, selvom navnene i dem er
+-- forskellige (hver klient ser sin egen online-status). nil, hvis linjen ikke ligner et svar.
+local function AnswerKey(line)
+    if line:find("^Nobody with GuildCrafters can craft ") or line:find("^%d+ matches: .*Be more specific%.$") then
+        return line:lower()
+    end
+    local label = line:match("^(.-): online ") or line:match("^(.-): offline ")
+    if not label then return nil end
+    local kind, id = ns.Compat.LinkRecipe(label)
+    if kind then return kind .. id end
+    return label:lower()
+end
+
+-- En andens svar i guild-chatten: drop vores eget svar på samme spørgsmål.
+local function SeenAnswer(text)
+    local key = next(pending) and AnswerKey(text)
+    if not key then return end
+    for id, rest in pairs(pending) do
+        if AnswerKey(Answer.Reply(rest) or "") == key then
+            pending[id] = nil
+            answered[id] = GetTime()
+        end
+    end
+end
+
 ns.Comm:Handle("ANS", function(sender, msg)
     if sender == ns.Compat.PlayerKey() or type(msg.a) ~= "string" then return end
     pending[msg.a] = nil
@@ -142,15 +169,23 @@ end)
 ns:RegisterEvent("CHAT_MSG_GUILD", function(_, text, sender)
     if ns.Comm.IsSecret(text, sender) or type(text) ~= "string" or type(sender) ~= "string" then return end
     local rest = Parse(text)
-    if not rest or rest == "" or not Enabled() or not ns.Data:GetGuild() then return end
-    local id = QuestionID(ns.Compat.FullName(sender), rest)
+    local from = ns.Compat.FullName(sender)
+    if not rest then
+        if from ~= ns.Compat.PlayerKey() then SeenAnswer(text) end
+        return
+    end
+    if rest == "" or not Enabled() or not ns.Data:GetGuild() then return end
+    local id = QuestionID(from, rest)
     if pending[id] or Recent(id) then return end
-    pending[id] = true
+    pending[id] = rest
     Answer.Reply(rest)      -- bestiller item-navne fra serveren, så de er klar, når det er vores tur
     C_Timer.After(FIRST + Rank() * STEP + math.random() * 0.5, function()
         if not pending[id] then return end      -- en anden har svaret
         pending[id] = nil
-        if ns.Compat.InCombat() or not Enabled() then return end    -- næste i rækken svarer
+        -- I kamp, i en instance (ANS når ikke altid frem) eller med sync på pause: næste i rækken svarer.
+        if ns.Compat.InCombat() or ns.Compat.InInstance() or ns.Comm.paused or not Enabled() then
+            return
+        end
         local reply = Answer.Reply(rest)
         if not reply then return end
         answered[id] = GetTime()

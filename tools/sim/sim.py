@@ -2432,6 +2432,26 @@ def scenario_craft_chat():
     anna.combat(False)
     w.step(10)
 
+    # Sikringer mod dobbelte svar: i en instance svarer man ikke selv, og et tabt ANS opdages i chatten.
+    anna.g.sim_inInstance = True
+    replies = ask("!craft lesser deflection")
+    check([r[0] for r in replies] == ["Bob"], f"Den første i rækken er i en instance: den næste svarer ({replies})")
+    anna.g.sim_inInstance = False
+    anna.guild_muted = True                         # Annas ANS når ikke frem, men hendes chatlinje gør
+    replies = ask("!craft vest")
+    check([r[0] for r in replies] == ["Anna"],
+          f"ANS gik tabt: de andre ser Annas svar i chatten og dropper deres eget ({replies})")
+    anna.guild_muted = False
+    w.step(30)
+    start = len(w.chat_log)
+    w.chat(upn, GUILD, "!craft titans", "GUILD")
+    w.step(0.2)
+    w.chat(bob.key, GUILD, "Flask of the Titans: online Bob", "GUILD")    # ligner et svar, men uden link
+    w.chat(bob.key, GUILD, "[Brown Linen Vest]: online Bob", "GUILD")      # svar på noget andet
+    w.step(15)
+    check([r[1] for r in w.chat_log[start + 3:]] == ["Anna"],
+          f"Et svar på et andet spørgsmål stopper ikke svaret ({w.chat_log[start + 3:]})")
+
     # Whisper: svaret kommer som whisper, kun til guild-medlemmer.
     replies = ask("!craft linen vest", 5, target=cara.key)
     check(replies == [("Cara", "WHISPER", "Upn", "|cffffffff|Hitem:2568::::::::|h[Brown Linen Vest]|h|r: online Bob")],

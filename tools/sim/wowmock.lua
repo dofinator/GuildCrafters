@@ -663,6 +663,12 @@ function sim_deliver(prefix, text, channel, sender)
     if prefixes[prefix] then sim_fire("CHAT_MSG_ADDON", prefix, text, channel, sender) end
 end
 
+sim_inInstance = false
+function IsInInstance()
+    if sim_inInstance then return true, "raid" end
+    return false, "none"
+end
+
 -- Chatlinjer (fx svaret på "!craft"): sim.py leverer dem som CHAT_MSG_GUILD / CHAT_MSG_WHISPER.
 sim_chatSent = {}
 function SendChatMessage(text, chatType, lang, target)

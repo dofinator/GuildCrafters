@@ -216,6 +216,13 @@ function Compat.InCombat()
     return InCombatLockdown ~= nil and InCombatLockdown() and true or false
 end
 
+-- Er spilleren inde i en dungeon, raid, battleground eller arena?
+function Compat.InInstance()
+    if not IsInInstance then return false end
+    local inside, kind = IsInInstance()
+    return (inside and kind ~= "none") and true or false
+end
+
 -- Til /gc debug ping: hvad svarer klientens lockdown-funktioner lige nu? "n/a" = findes ikke.
 function Compat.LockdownInfo()
     local parts = { "combat=" .. tostring(Compat.InCombat()) }
