@@ -162,6 +162,20 @@ function Compat.LinkRecipe(text)
     if id then return "e", tonumber(id) end
 end
 
+-- Chat-filter. Forever/Mainline har ChatFrameUtil.AddMessageEventFilter (andre Forever-addons bruger kun den,
+-- og den globale ChatFrame_AddMessageEventFilter findes måske ikke der); Classic har kun den globale.
+-- Returnerer true, hvis filteret blev sat op.
+function Compat.AddMessageEventFilter(event, fn)
+    if ChatFrameUtil and ChatFrameUtil.AddMessageEventFilter then
+        ChatFrameUtil.AddMessageEventFilter(event, fn)
+        return true
+    elseif ChatFrame_AddMessageEventFilter then
+        ChatFrame_AddMessageEventFilter(event, fn)
+        return true
+    end
+    return false
+end
+
 -- Indsætter et link i den åbne chatboks (shift-klik).
 local insertingOwnLink = false
 function Compat.InsertLink(link)

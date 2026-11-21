@@ -28,6 +28,7 @@ VERBOSE = "-v" in sys.argv
 
 REALM = "Spineshatter"
 GUILD = "Testguild"
+NOT_FOUND = "No player named '%s' is currently playing."
 
 # id: (navn, classID, subclassID, quality, required level, tooltip-tekst adskilt med ;)
 ITEMS = {
@@ -134,6 +135,9 @@ class World:
         elif channel == "WHISPER":
             short = target.split("-")[0]
             receivers = [c for c in self.clients if c.online and c.name == short]
+            if not receivers:
+                # Som i spillet: en whisper til en, der ikke er online, giver afsenderen en systembesked.
+                self.queue.append((self.now + 0.1, sender, None, NOT_FOUND % target, "SYSTEM", None))
         else:
             receivers = []
         for r in receivers:
@@ -160,7 +164,9 @@ class World:
             due = [m for m in self.queue if m[0] <= self.now]
             self.queue = [m for m in self.queue if m[0] > self.now]
             for _, client, prefix, text, channel, sender in due:
-                if client.online and prefix is None:        # chatlinje (se chat)
+                if client.online and channel == "SYSTEM":   # systembesked (se send)
+                    client.L.globals().sim_systemMessage(text)
+                elif client.online and prefix is None:      # chatlinje (se chat)
                     client.L.globals().sim_fire(channel, text, sender)
                 elif client.online:
                     client.L.globals().sim_deliver(prefix, text, channel, sender)
@@ -2692,6 +2698,35 @@ def scenario_ux3():
     lua_errors(me, anna, bob)
 
 
+def scenario_not_found_filter():
+    print("\nScenarie 27: 'No player named' skjules efter vores whispers, også på Mainline/Forever")
+    for flavor in ("classic", "mainline"):
+        w = World()
+        # Jeg er den blokerede: Jeg sender sine beskeder som whispers (reserve-transporten).
+        ven = _player(w, "Ven", [ENCH], flavor=flavor)
+        _join(w, ven, 120)
+        jeg = _player(w, "Jeg", [TAIL], muted=True, flavor=flavor)
+        _join(w, jeg, 120)
+        check(not _missing([jeg, ven]), f"{flavor}: whisper-reserven virker ({_missing([jeg, ven])})")
+        # Ven forsvinder, før Jegs roster har opdaget det (som når nogen logger af lige før vores whisper).
+        ven.online = False
+        jeg.prints.clear()
+        start = w.now
+        w.step(1300)
+        g = jeg.L.globals()
+        msgs = [(m.text, m.shown) for _, m in sorted(g.sim_systemMessages.items())
+                if "No player named 'Ven" in m.text]
+        whispered = [s for s in w.sent if s[0] > start and s[1] == "Jeg" and s[2] == "WHISPER"]
+        check(whispered and msgs, f"{flavor}: Jeg whispered Ven efter logout og fik fejlbeskeden "
+                                  f"({len(whispered)} whispers, {len(msgs)} beskeder)")
+        check(msgs and not any(shown for _, shown in msgs), f"{flavor}: fejlbeskeden er skjult ({msgs})")
+        check(not any("No player named" in p for p in jeg.prints), f"{flavor}: intet i chatten ({jeg.prints})")
+        # En fremmed fejlbesked (ingen whisper fra os) skal stadig vises.
+        g.sim_systemMessage(NOT_FOUND % "Zed")
+        check(any("No player named 'Zed'" in p for p in jeg.prints), f"{flavor}: fremmed fejlbesked vises")
+        lua_errors(jeg)
+
+
 if __name__ == "__main__":
     scenario_sync()
     scenario_relay()
@@ -2718,6 +2753,7 @@ if __name__ == "__main__":
     scenario_ux2()
     scenario_craft_chat()
     scenario_ux3()
+    scenario_not_found_filter()
     print()
     if failures:
         print(f"{len(failures)} FEJL")

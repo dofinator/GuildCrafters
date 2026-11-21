@@ -339,6 +339,28 @@ function ToggleDropDownMenu(_, _, frame)
     frame.sim_init(frame, 1)
 end
 function ChatFrame_SendTell(name) table.insert(sim_whispers, name) end
+-- Chat-filtre og systembeskeder. Classic har kun den globale funktion; Mainline-profilen nedenfor har kun
+-- ChatFrameUtil-udgaven (som Forever-addonsene bruger). sim_systemMessage kører filtrene som chatvinduet
+-- og skriver beskeden i chatten, hvis intet filter skjuler den.
+ERR_CHAT_PLAYER_NOT_FOUND_S = "No player named '%s' is currently playing."
+sim_chatFilters = {}
+sim_systemMessages = {}     -- { text, shown }
+function ChatFrame_AddMessageEventFilter(event, fn)
+    sim_chatFilters[event] = sim_chatFilters[event] or {}
+    table.insert(sim_chatFilters[event], fn)
+end
+function sim_systemMessage(text)
+    sim_fire("CHAT_MSG_SYSTEM", text)
+    for _, fn in ipairs(sim_chatFilters.CHAT_MSG_SYSTEM or {}) do
+        if fn(DEFAULT_CHAT_FRAME, "CHAT_MSG_SYSTEM", text) then
+            table.insert(sim_systemMessages, { text = text, shown = false })
+            return false
+        end
+    end
+    table.insert(sim_systemMessages, { text = text, shown = true })
+    DEFAULT_CHAT_FRAME:AddMessage(text)
+    return true
+end
 SLASH_WHISPER1 = "/w"
 -- Som i WoW: "/w Navn besked" bliver til en whisper til Navn med "besked" stående i chatboksen.
 function ChatFrame_OpenChat(text)
@@ -697,6 +719,9 @@ if sim_flavor == "mainline" then
     C_ChatInfo.AreOutgoingAddonChatMessagesRestricted = function() return sim_lockdown end
     -- Retail 11.2+: SendChatMessage ligger i C_ChatInfo.
     C_ChatInfo.SendChatMessage, SendChatMessage = SendChatMessage, nil
+    -- Chat-filtre: kun ChatFrameUtil-udgaven (andre Forever-addons bruger kun den).
+    ChatFrameUtil = ChatFrameUtil or {}
+    ChatFrameUtil.AddMessageEventFilter, ChatFrame_AddMessageEventFilter = ChatFrame_AddMessageEventFilter, nil
 
     -- Items og spells
     C_Item = {
