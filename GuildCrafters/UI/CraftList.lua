@@ -110,10 +110,10 @@ end
 -- Én række pr. item efterfulgt af dets mats. Beholdningen fordeles ovenfra og ned (have), så to items,
 -- der bruger samme mat, ikke begge regner med de samme stk.; det afgør Ready/Missing og farven.
 -- Rækken viser derimod alt, man har (own): "0" på de nederste items lignede, at man intet havde.
--- Returnerer antal Ready og det, der mangler i alt på tværs af listen: { { id, name, count }, ... }.
+-- Returnerer antal Ready.
 local function BuildData()
     wipe(data)
-    local pool, owned, totalNeed, order = {}, {}, {}, {}
+    local pool, owned = {}, {}
     local ready = 0
     for _, e in ipairs(ns.db.craftList) do
         local name = ns.Index.Name(e.kind, e.id) or "Loading..."
@@ -137,12 +137,9 @@ local function BuildData()
                 if pool[r.id] == nil then
                     owned[r.id] = ns.Index:OwnCount(r.id)
                     pool[r.id] = owned[r.id]
-                    totalNeed[r.id] = 0
-                    table.insert(order, r.id)
                 end
                 local need, have = r.count * crafts, pool[r.id]
                 pool[r.id] = math.max(0, have - need)
-                totalNeed[r.id] = totalNeed[r.id] + need
                 if have < need then missing = missing + 1 end
                 local matName = ns.Compat.ItemName(r.id) or "Loading..."
                 table.insert(mats, {
@@ -169,14 +166,31 @@ local function BuildData()
                 .. "and must open the profession once." })
         end
     end
-    local short = {}
-    for _, id in ipairs(order) do
-        if totalNeed[id] > owned[id] then
-            table.insert(short, { id = id, name = ns.Compat.ItemName(id) or "Loading...",
-                count = totalNeed[id] - owned[id] })
+    return ready
+end
+
+-- Det, craft-listen mangler i alt: { { id, name, have, need }, ... } i listens rækkefølge (kun mats
+-- med kendte reagents). Bruges af toplinjen her og af trackeren (UI/Tracker.lua).
+function UI.CraftListMissing()
+    local need, order = {}, {}
+    for _, e in ipairs(ns.db.craftList) do
+        local made, reagents = ns.Index:Reagents(e.kind, e.id)
+        for _, r in ipairs(reagents or {}) do
+            if not need[r.id] then
+                need[r.id] = 0
+                table.insert(order, r.id)
+            end
+            need[r.id] = need[r.id] + r.count * math.ceil(e.qty / made)
         end
     end
-    return ready, short
+    local list = {}
+    for _, id in ipairs(order) do
+        local have = ns.Index:OwnCount(id)
+        if have < need[id] then
+            table.insert(list, { id = id, name = ns.Compat.ItemName(id) or "Loading...", have = have, need = need[id] })
+        end
+    end
+    return list
 end
 
 ------------------------------------------------------------------------
@@ -240,7 +254,8 @@ end
 
 local function OpenMenu(item, _, row)
     if item.entry then
-        UI.WhisperMenu(row, item.name, item.keys, CraftMessage(item))
+        UI.WhisperMenu(row, item.name, item.keys, CraftMessage(item),
+            { ns.Answer.PostMenuItem(item.kind, item.id) })
         return
     end
     -- Mat: mangler man den, og kan nogen crafte den, kan den lægges på listen som sit eget punkt.
@@ -459,7 +474,8 @@ end
 
 Refresh = function()
     if not scroll then return end
-    local ready, short = BuildData()
+    local ready = BuildData()
+    local short = UI.CraftListMissing()
     local count = #ns.db.craftList
     if count == 0 then
         summary:SetText("")
@@ -470,7 +486,7 @@ Refresh = function()
         local text = string.format("%d of %d ready", ready, count)
         local parts = {}
         for i = 1, math.min(#short, MAX_SHORT) do
-            parts[i] = short[i].count .. " " .. short[i].name
+            parts[i] = (short[i].need - short[i].have) .. " " .. short[i].name
         end
         if #parts > 0 then
             text = text .. " · |cffff6060still to get:|r " .. table.concat(parts, ", ")
@@ -499,7 +515,7 @@ local function Build(content)
 
     summary = content:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
     summary:SetPoint("LEFT", title, "RIGHT", 16, 0)
-    summary:SetPoint("RIGHT", content, "RIGHT", -130, 0)      -- frem til Clear list
+    summary:SetPoint("RIGHT", content, "RIGHT", -206, 0)      -- frem til Tracker og Clear list
     summary:SetJustifyH("LEFT")
     summary:SetWordWrap(false)
 
@@ -518,12 +534,28 @@ local function Build(content)
         if #ns.db.craftList > 0 then StaticPopup_Show("GUILDCRAFTERS_CLEAR_LIST") end
     end)
 
+    -- Det lille vindue med det, man stadig mangler (UI/Tracker.lua).
+    local tracker = CreateFrame("Button", nil, content, "UIPanelButtonTemplate")
+    tracker:SetSize(70, 22)
+    tracker:SetPoint("RIGHT", clear, "LEFT", -6, 0)
+    tracker:SetText("Tracker")
+    tracker:SetScript("OnClick", function() UI.ToggleTracker() end)
+    tracker:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+        GameTooltip:AddLine("Tracker")
+        GameTooltip:AddLine("A small window with the mats you still need. It stays open while you play "
+            .. "and closes itself when you have everything.", 1, 1, 1, true)
+        GameTooltip:Show()
+    end)
+    tracker:SetScript("OnLeave", function() GameTooltip:Hide() end)
+
     Header(content, "MATERIAL", COL.matName)
     Header(content, "HAVE", COL.have.right, true)
     Header(content, "GUILD HAS", COL.guild)
 
     local height = UI.CONTENT_HEIGHT + LIST_TOP - UI.FOOTER_HEIGHT - 4
     scroll = CreateFrame("ScrollFrame", "GuildCraftersCraftListScroll", content, "FauxScrollFrameTemplate")
+    UI.CtrlWheel(scroll)      -- Ctrl+hjul: vinduets størrelse
     scroll:SetPoint("TOPLEFT", 0, LIST_TOP)
     scroll:SetPoint("RIGHT", content, "RIGHT", -26, 0)
     scroll:SetHeight(height)

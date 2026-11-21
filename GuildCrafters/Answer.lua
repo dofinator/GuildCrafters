@@ -113,6 +113,19 @@ function Answer.Reply(rest)
     return text:sub(1, MAX_LEN)
 end
 
+-- "Post crafters to guild chat" i højreklik-menuerne i Crafting og Craft List (fra v0.17): samme linje
+-- som svaret på "!craft", sendt af en selv.
+function Answer.Post(kind, id)
+    local label = (kind == "i" and ns.Compat.ItemLink(id)) or ns.Index.Name(kind, id)
+    if label then ns.Compat.SendChat(CraftersLine(kind, id, label), "GUILD") end
+end
+
+-- Menupunktet til en recipe, eller nil uden guild.
+function Answer.PostMenuItem(kind, id)
+    if not ns.Compat.GuildKey() then return nil end
+    return { text = "Post crafters to guild chat", func = function() Answer.Post(kind, id) end }
+end
+
 -- Vores plads i rækkefølgen: 0 = vi svarer først. Alle online addon-brugere i guilden, sorteret efter
 -- navn, så alle klienter (næsten altid) når frem til samme rækkefølge.
 local function Rank()

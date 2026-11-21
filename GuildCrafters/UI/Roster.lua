@@ -454,6 +454,7 @@ local function Build(content)
     end
 
     scroll = CreateFrame("ScrollFrame", "GuildCraftersRosterScroll", content, "FauxScrollFrameTemplate")
+    UI.CtrlWheel(scroll)      -- Ctrl+hjul: vinduets størrelse
     scroll:SetPoint("TOPLEFT", 0, -54)
     scroll:SetPoint("BOTTOMRIGHT", -26, UI.FOOTER_HEIGHT + 4)
     scroll:SetScript("OnVerticalScroll", function(self, offset)

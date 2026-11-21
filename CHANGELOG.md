@@ -1,22 +1,10 @@
-# GuildCrafters 0.16.0
+# GuildCrafters 0.17.0
 
-Ask the guild chat who can craft something, and small changes that make the window easier to read. Nothing to set up.
+An easier overview of the guild's professions, a small window for the mats you still need, and a bigger or smaller window if you like. Nothing to set up.
 
 ## New
 
-- Type **!craft** and an item name in guild chat, for example `!craft flask of the titans`, or shift-click the item after `!craft `. One player with GuildCrafters answers in guild chat with who can craft it, online players first. Guild members without the addon can ask too.
-- Whisper `!craft <item>` to someone with GuildCrafters to get the answer as a whisper instead.
-- `/gc answer off` stops your character from answering; someone else with the addon answers instead.
-
-## Changed
-
-- **Craft List** shows mats the way the game's own profession window does: "2/5" means you have 2 and the item needs 5. The top line now says what you still need to get in total, for example "still to get: 12 Veiled Crystal".
-- **Mats** looks like the Crafting tab: one line per mat, about twice as many on screen, and you can sort by name or by who has the most. Hover a mat to see bags and bank, and when it was last updated. The character you are playing is no longer listed there; you already see that in your bags.
-- Adding a recipe to your craft list no longer writes a line in the chat. The row shows "x1" instead.
-- Recipe tooltips show the names of the reagents right away instead of "Loading...".
-- The whisper menus no longer offer your own characters.
-- The Lvl column in Crafting is hidden when nothing on the list has a level, which gives the names more room.
-
-## Fixed
-
-- Retail: a recipe you know in several ranks was listed once per rank under the same name. Only the highest rank you know is listed now.
+- **By profession** in the Crafting tab: every profession with how many in the guild have it, the highest skill and who is online right now. Professions nobody in the guild has are listed too. Click a profession to see who has it, and click a name to see their recipes.
+- **Post crafters to guild chat** in the right-click menu of a recipe (Crafting) and of an item (Craft List). It posts the same line as an answer to `!craft`.
+- **Tracker**: the new button in the Craft List (or `/gc tracker`) opens a small window with the mats your craft list still needs, like "Black Lotus 0/1". It stays open while you play, comes back after logging in, and closes itself when you have everything.
+- **Window size**: `/gc scale 1.2` makes the window 20 % bigger, `/gc scale` sets it back. Ctrl + mouse wheel over the window works too.

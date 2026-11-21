@@ -204,6 +204,28 @@ function Index:Professions(key)
     return list
 end
 
+-- Alle professions i guilden, også gathering uden recipes: { ["Alchemy"] = { { key, rank, max }, ... } }.
+-- Hver liste er sorteret med online først, derefter højeste skill og navn.
+function Index:ProfessionHolders()
+    Ensure()
+    local map = {}
+    for key, p in pairs(people) do
+        for name, prof in pairs(p.rec.profs or {}) do
+            map[name] = map[name] or {}
+            table.insert(map[name], { key = key, rank = prof.rank or 0, max = prof.max })
+        end
+    end
+    for _, list in pairs(map) do
+        table.sort(list, function(a, b)
+            local oa, ob = Online(a.key), Online(b.key)
+            if oa ~= ob then return oa end
+            if a.rank ~= b.rank then return a.rank > b.rank end
+            return a.key < b.key
+        end)
+    end
+    return map
+end
+
 function Index:CanCraft(key, kind, id)
     Ensure()
     for _, k in ipairs(crafters[kind .. id] or {}) do

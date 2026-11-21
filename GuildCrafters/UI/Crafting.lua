@@ -22,8 +22,22 @@ local state = {
     top = nil,          -- valgt kategori (nil = alle)
     sub = nil,          -- valgt underkategori
     crafter = nil,      -- valgt crafter under "By crafter"
+    profs = nil,        -- true: "By profession" er valgt
     expanded = {},
 }
+
+-- "By profession" (fra v0.17, valgt af brugeren ud fra mockups): én række pr. profession med antal,
+-- højeste skill og hvem der er online, også dem ingen i guilden har. Klik folder crafterne ud (online
+-- og højeste skill først); klik på en crafter viser deres recipes. Kolonner (x i rækken):
+local PCOL = { count = 236, best = 296, online = 312 }
+-- Professions, alle klienter har, så "nobody in the guild" kan stå ved dem. Jewelcrafting, Inscription,
+-- First Aid o.l. findes ikke i alle klienter og vises kun, når nogen har dem.
+local BASE_PROFS = { "Alchemy", "Blacksmithing", "Enchanting", "Engineering", "Leatherworking", "Tailoring",
+    "Herbalism", "Mining", "Skinning", "Cooking", "Fishing" }
+local MAX_ONLINE = 3            -- navne i Online-kolonnen; resten som "+N"
+local profOpen = {}             -- ["Alchemy"] = true: crafterne er foldet ud (huskes denne session)
+local profMap = {}              -- Index:ProfessionHolders() fra seneste Refresh
+local profHeaders = {}
 -- Gemmes mellem sessioner (UI.Saved): onlineOnly, usable, sortKey ("name"/"level"/"crafters"), sortDesc.
 local saved
 
@@ -55,6 +69,9 @@ local function BuildCategoryEntries()
             end
         end
     end
+    local profCount = 0
+    for _ in pairs(profMap) do profCount = profCount + 1 end
+    table.insert(catEntries, { type = "profs", label = "By profession", count = profCount })
     local crafters = ns.Index:CrafterList()
     table.insert(catEntries, { type = "crafters", label = "By crafter", count = #crafters })
     if state.expanded["By crafter"] then
@@ -66,15 +83,19 @@ local function BuildCategoryEntries()
 end
 
 local function IsSelected(e)
-    if e.type == "all" then return not state.top and not state.crafter end
+    if e.type == "all" then return not state.top and not state.crafter and not state.profs end
     if e.type == "top" then return state.top == e.name and not state.sub end
     if e.type == "sub" then return state.top == e.top and state.sub == e.name end
     if e.type == "crafter" then return state.crafter == e.key end
+    if e.type == "profs" then return state.profs == true end
     return false
 end
 
 local function SelectEntry(e)
-    if e.type == "all" then
+    if e.type ~= "crafters" then state.profs = nil end
+    if e.type == "profs" then
+        state.top, state.sub, state.crafter, state.profs = nil, nil, nil, true
+    elseif e.type == "all" then
         state.top, state.sub, state.crafter = nil, nil, nil
     elseif e.type == "top" then
         if state.top == e.name and not state.sub then
@@ -127,6 +148,7 @@ end
 
 local function CreateCategoryPane(content, maxHeight)
     catScroll = CreateFrame("ScrollFrame", "GuildCraftersCategoryScroll", content, "FauxScrollFrameTemplate")
+    UI.CtrlWheel(catScroll)      -- Ctrl+hjul: vinduets størrelse
     catScroll:SetWidth(CAT_WIDTH - 22)
     catScroll:SetScript("OnVerticalScroll", function(self, offset)
         FauxScrollFrame_OnVerticalScroll(self, offset, CAT_ROW, UpdateCategories)
@@ -291,6 +313,7 @@ local function RecipeMenu(item, _, row)
             ns.Data:CraftListSetQty(item.kind, item.id, 0)
         end })
     end
+    table.insert(extra, ns.Answer.PostMenuItem(item.kind, item.id))
     UI.WhisperMenu(row, item.name, item.keys, "Hi! Could you " .. verb .. UI.ItemRef(item) .. " for me?", extra)
 end
 
@@ -362,7 +385,15 @@ local function BuildProfData(items)
     return profs
 end
 
+-- Kolonnerne, kun "By profession" bruger.
+local function ClearProfCols(row)
+    row.pcount:SetText("")
+    row.pbest:SetText("")
+    row.ponline:SetText("")
+end
+
 local function ShowHeaderRow(row, d)
+    ClearProfCols(row)
     local arrow = collapsed[d.key] and "+ " or "- "
     row.icon:Hide()
     row.add:Hide()
@@ -386,6 +417,7 @@ local function ShowHeaderRow(row, d)
 end
 
 local function ShowRecipeRow(row, d)
+    ClearProfCols(row)
     local indent = state.crafter and INDENT or 0
     row.band:Hide()
     row.icon:SetPoint("LEFT", COL.icon + indent, 0)
@@ -405,16 +437,152 @@ local function ShowRecipeRow(row, d)
     row.add:Show()
 end
 
+------------------------------------------------------------------------
+-- "By profession"
+------------------------------------------------------------------------
+
+-- Online-kolonnen for en profession: korte grønne navne, højst MAX_ONLINE, resten som "+N".
+local function OnlineNames(holders)
+    local names = {}
+    for _, h in ipairs(holders) do
+        if ns.Index:IsOnline(h.key) then table.insert(names, ns.Compat.ShortName(h.key)) end
+    end
+    if #names == 0 then return "|cff808080-|r" end
+    local shown = {}
+    for i = 1, math.min(#names, MAX_ONLINE) do shown[i] = names[i] end
+    local text = "|cff40ff40" .. table.concat(shown, ", ") .. "|r"
+    if #names > #shown then text = text .. string.format(" |cffaaaaaa+%d|r", #names - #shown) end
+    return text
+end
+
+-- Rækker til "By profession": en række pr. profession, og crafterne under dem, der er foldet ud.
+-- Søgning matcher profession- eller personnavn; et træf på en person folder professionen ud.
+local function BuildProfView()
+    wipe(data)
+    local query = state.query:lower()
+    local names, seen = {}, {}
+    for _, name in ipairs(BASE_PROFS) do
+        seen[name] = true
+        table.insert(names, name)
+    end
+    for name in pairs(profMap) do
+        if not seen[name] then table.insert(names, name) end
+    end
+    local list, nobody = {}, {}
+    for _, name in ipairs(names) do
+        local holders = {}
+        for _, h in ipairs(profMap[name] or {}) do
+            if not saved.onlineOnly or ns.Index:IsOnline(h.key) then table.insert(holders, h) end
+        end
+        local nameHit = query == "" or name:lower():find(query, 1, true) ~= nil
+        local shown = holders
+        if not nameHit then
+            shown = {}
+            for _, h in ipairs(holders) do
+                if ns.Index:DisplayName(h.key):lower():find(query, 1, true) then table.insert(shown, h) end
+            end
+        end
+        if not profMap[name] then table.insert(nobody, name) end
+        if nameHit or #shown > 0 then
+            local best = 0
+            for _, h in ipairs(holders) do best = math.max(best, h.rank) end
+            table.insert(list, { prof = true, name = name, count = #holders, best = best,
+                holders = shown, open = profOpen[name] or not nameHit,
+                online = #holders > 0 and OnlineNames(holders) or nil })
+        end
+    end
+    local key, desc = saved.profSort, saved.profDesc
+    table.sort(list, function(a, b)
+        local va, vb = a.name, b.name
+        if key == "count" then va, vb = a.count, b.count
+        elseif key == "best" then va, vb = a.best, b.best end
+        if va ~= vb then
+            if desc then return va > vb end
+            return va < vb
+        end
+        return a.name < b.name
+    end)
+    for _, p in ipairs(list) do
+        table.insert(data, p)
+        if p.open then
+            for _, h in ipairs(p.holders) do
+                table.insert(data, { holder = h.key, rank = h.rank, max = h.max, profName = p.name })
+            end
+        end
+    end
+    table.sort(nobody)
+    return #list, nobody
+end
+
+local function ShowProfRow(row, d)
+    row.band:Show()
+    row.add:Hide()
+    row.right:SetText("")
+    row.crafters:SetText("")
+    row.onList:SetText("")
+    row.info:SetText("")
+    row.icon:SetPoint("LEFT", COL.icon, 0)
+    row.icon:SetTexture(UI.ProfIcon(d.name))
+    row.icon:Show()
+    row.label:SetFontObject("GameFontNormalSmall")
+    row.label:SetPoint("LEFT", COL.name, 0)
+    row.label:SetWidth(PCOL.count - COL.name - 40)
+    local arrow = d.count == 0 and "  " or (d.open and "- " or "+ ")
+    row.label:SetText(arrow .. d.name)
+    row.pcount:SetText(d.count > 0 and tostring(d.count) or "|cff8080800|r")
+    row.pbest:SetText(d.count > 0 and tostring(d.best) or "|cff808080-|r")
+    if d.count == 0 then
+        row.ponline:SetText(saved.onlineOnly and "|cff808080nobody online|r" or "|cff808080nobody in the guild|r")
+    else
+        row.ponline:SetText(d.online)
+    end
+end
+
+local function ShowHolderRow(row, d)
+    row.band:Hide()
+    row.add:Hide()
+    row.icon:Hide()
+    row.right:SetText("")
+    row.crafters:SetText("")
+    row.onList:SetText("")
+    row.info:SetText("")
+    row.label:SetFontObject("GameFontHighlightSmall")
+    row.label:SetPoint("LEFT", COL.name + INDENT, 0)
+    row.label:SetWidth(PCOL.count - COL.name - INDENT - 10)
+    row.label:SetText(UI.PersonText(d.holder))
+    row.pcount:SetText("")
+    row.pbest:SetText(d.max and string.format("%d/%d", d.rank, d.max) or tostring(d.rank))
+    row.ponline:SetText(ns.Index:IsOnline(d.holder) and "|cff40ff40online|r" or "|cffaaaaaaoffline|r")
+end
+
+local function HolderMenu(row, key)
+    local items = { { text = ns.Index:DisplayName(key), isTitle = true } }
+    if #ns.Index:Professions(key) > 0 then
+        table.insert(items, { text = "Show recipes", func = function() UI.ShowCrafter(key) end })
+    end
+    if key ~= ns.Compat.PlayerKey() and not ns.Data:IsMine(key) then
+        table.insert(items, { text = "Whisper " .. ns.Compat.ShortName(key),
+            func = function() UI.WhisperAbout(key) end })
+    end
+    ns.Compat.ContextMenu(row, items)
+end
+
 local function UpdateRows()
     local offset = FauxScrollFrame_GetOffset(scroll)
     for i, row in ipairs(rows) do
         local d = i <= rowsVisible and data[offset + i] or nil
         row.header = d and d.header and d or nil
-        row.item = d and not d.header and d or nil
+        row.profRow = d and d.prof and d or nil
+        row.holder = d and d.holder or nil
+        row.item = d and not d.header and not d.prof and not d.holder and d or nil
         if not d then
             row:Hide()
         else
-            if d.header then
+            if d.prof then
+                ShowProfRow(row, d)
+            elseif d.holder then
+                ShowHolderRow(row, d)
+            elseif d.header then
                 ShowHeaderRow(row, d)
             else
                 ShowRecipeRow(row, d)
@@ -488,9 +656,35 @@ local function CreateRow(content, index)
     row.crafters:SetJustifyH("LEFT")
     row.crafters:SetWordWrap(false)
 
+    -- "By profession": antal crafters, højeste skill og hvem der er online.
+    row.pcount = row:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
+    row.pcount:SetPoint("RIGHT", row, "LEFT", PCOL.count, 0)
+    row.pcount:SetJustifyH("RIGHT")
+    row.pbest = row:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
+    row.pbest:SetPoint("RIGHT", row, "LEFT", PCOL.best, 0)
+    row.pbest:SetJustifyH("RIGHT")
+    row.ponline = row:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
+    row.ponline:SetPoint("LEFT", PCOL.online, 0)
+    row.ponline:SetPoint("RIGHT", -6, 0)
+    row.ponline:SetJustifyH("LEFT")
+    row.ponline:SetWordWrap(false)
+
     -- Overskrifter folder ind/ud ved klik (som kategorierne til venstre); recipes som alle andre items.
+    -- I "By profession" folder et klik på en profession crafterne ud, og et klik på en crafter viser
+    -- deres recipes (højreklik: menu).
     row:SetScript("OnClick", function(self, button)
-        if self.header then
+        if self.profRow then
+            if button == "LeftButton" and self.profRow.count > 0 then
+                profOpen[self.profRow.name] = not self.profRow.open
+                Refresh()
+            end
+        elseif self.holder then
+            if button == "RightButton" then
+                HolderMenu(self, self.holder)
+            elseif #ns.Index:Professions(self.holder) > 0 then
+                UI.ShowCrafter(self.holder)
+            end
+        elseif self.header then
             if button == "LeftButton" then
                 collapsed[self.header.key] = not collapsed[self.header.key]
                 Refresh()
@@ -500,7 +694,18 @@ local function CreateRow(content, index)
         end
     end)
     row:SetScript("OnEnter", function(self)
-        if self.item then ShowResultTooltip(self.item, self) end
+        if self.item then
+            ShowResultTooltip(self.item, self)
+        elseif self.holder then
+            GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+            GameTooltip:AddLine(ns.Index:DisplayName(self.holder))
+            if #ns.Index:Professions(self.holder) > 0 then
+                GameTooltip:AddLine("Click: show recipes. Right-click: whisper", 0.5, 0.5, 0.5, true)
+            else
+                GameTooltip:AddLine("Right-click: whisper", 0.5, 0.5, 0.5, true)
+            end
+            GameTooltip:Show()
+        end
     end)
     row:SetScript("OnLeave", function(self)
         self.tipItem = nil
@@ -528,6 +733,32 @@ local function CreateHeaders(content)
     Add("name", "Name", COL.name, 120)
     Add("level", "Lvl", COL.levelRight - 26, 34)
     Add("crafters", "Crafters", COL.crafters, 90)
+
+    -- "By profession" har sine egne kolonner (og sin egen sortering, saved.profSort).
+    local function AddProf(key, label, x, width)
+        local header = UI.CreateSortHeader(headerBar, label, width, function()
+            if saved.profSort == key then
+                saved.profDesc = not saved.profDesc
+            else
+                saved.profSort, saved.profDesc = key, key ~= "name"
+            end
+            Refresh()
+        end)
+        header:SetPoint("LEFT", headerBar, "LEFT", x, 0)
+        profHeaders[key] = header
+    end
+    AddProf("name", "Profession", COL.name, 120)
+    AddProf("count", "Crafters", PCOL.count - 52, 60)
+    AddProf("best", "Best", PCOL.best - 28, 40)
+    profHeaders.online = headerBar:CreateFontString(nil, "ARTWORK", "GameFontNormalSmall")
+    profHeaders.online:SetPoint("LEFT", headerBar, "LEFT", PCOL.online, 0)
+    profHeaders.online:SetText("Online")
+end
+
+-- Viser kolonneoverskrifterne for den valgte visning.
+local function ShowHeaders(profView)
+    for _, header in pairs(headers) do header:SetShown(not profView) end
+    for _, header in pairs(profHeaders) do header:SetShown(profView) end
 end
 
 ------------------------------------------------------------------------
@@ -583,11 +814,40 @@ local function OnlyUsable(found)
     return kept
 end
 
+local function RefreshProfView()
+    ShowHeaders(true)
+    for key, header in pairs(profHeaders) do
+        if header.SetSort then
+            if key == saved.profSort then header:SetSort(saved.profDesc) else header:SetSort(nil) end
+        end
+    end
+    local _, nobody = BuildProfView()
+    if state.query ~= "" then
+        empty:SetText("No matches for \"" .. state.query .. "\" in professions.")
+    else
+        empty:SetText("No professions yet.")
+    end
+    empty:SetShown(#data == 0)
+    UpdateRows()
+    local have = 0
+    for _ in pairs(profMap) do have = have + 1 end
+    local status = string.format("%d profession%s in the guild", have, have == 1 and "" or "s")
+    if #nobody > 0 then status = status .. " · nobody has " .. ns.Data.JoinNames(nobody) end
+    if not ns.Compat.GuildKey() then status = "|cffff8080Not in a guild|r · " .. status end
+    footer:SetText(status)
+end
+
 Refresh = function()
     if not scroll then return end
     UpdateHint()
+    profMap = ns.Index:ProfessionHolders()
     BuildCategoryEntries()
     UpdateCategories()
+    if state.profs then
+        RefreshProfView()
+        return
+    end
+    ShowHeaders(false)
 
     local found, unresolved = ns.Index:Find({
         top = state.top, sub = state.sub, crafter = state.crafter,
@@ -658,7 +918,7 @@ end
 
 -- Åbner Crafting-fanen med én persons recipes (fra "Show recipes" i rosterens højreklik-menu).
 function UI.ShowCrafter(key)
-    state.top, state.sub, state.crafter = nil, nil, key
+    state.top, state.sub, state.crafter, state.profs = nil, nil, key, nil
     state.expanded["By crafter"] = true
     state.query = ""
     UI:ShowTab("Crafting")
@@ -668,7 +928,7 @@ end
 
 -- Åbner Crafting-fanen med en søgning i alle recipes (fra "/gc flask").
 function UI.SearchRecipes(text)
-    state.top, state.sub, state.crafter = nil, nil, nil
+    state.top, state.sub, state.crafter, state.profs = nil, nil, nil, nil
     state.query = text
     UI:ShowTab("Crafting")
     SetQuery(text)
@@ -677,7 +937,7 @@ end
 
 -- Reset som i auktionshuset: rydder søgning, flueben og valgt kategori/person (sorteringen bliver).
 local function Reset()
-    state.top, state.sub, state.crafter = nil, nil, nil
+    state.top, state.sub, state.crafter, state.profs = nil, nil, nil, nil
     saved.onlineOnly, saved.usable = false, false
     usableCheck:SetChecked(false)
     onlineCheck:SetChecked(false)
@@ -687,7 +947,8 @@ local function Reset()
 end
 
 local function Build(content)
-    saved = UI.Saved("crafting", { onlineOnly = false, usable = false, sortKey = "name", sortDesc = false })
+    saved = UI.Saved("crafting", { onlineOnly = false, usable = false, sortKey = "name", sortDesc = false,
+        profSort = "count", profDesc = true })
 
     searchBox = UI.CreateSearchBox(content, "GuildCraftersCraftingSearch", 270,
         "Search name or stats, e.g. \"fire res\"", function(text)
@@ -739,6 +1000,7 @@ local function Build(content)
     CreateHeaders(content)
 
     scroll = CreateFrame("ScrollFrame", "GuildCraftersResultScroll", content, "FauxScrollFrameTemplate")
+    UI.CtrlWheel(scroll)      -- Ctrl+hjul: vinduets størrelse
     scroll:SetScript("OnVerticalScroll", function(self, offset)
         FauxScrollFrame_OnVerticalScroll(self, offset, ROW, UpdateRows)
     end)

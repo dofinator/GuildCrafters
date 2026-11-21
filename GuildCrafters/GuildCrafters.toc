@@ -2,7 +2,7 @@
 ## Title: GuildCrafters
 ## Notes: Guild overview: who is who, and who can craft what.
 ## Author: Christoffer
-## Version: 0.16.0
+## Version: 0.17.0
 ## SavedVariables: GuildCraftersDB
 ## IconTexture: Interface\Icons\Trade_BlackSmithing
 ## X-Curse-Project-ID: 1741924
@@ -30,6 +30,7 @@ UI\List.lua
 UI\Roster.lua
 UI\Crafting.lua
 UI\CraftList.lua
+UI\Tracker.lua
 UI\Mats.lua
 UI\Launchers.lua
 Debug.lua
