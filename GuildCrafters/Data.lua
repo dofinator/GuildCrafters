@@ -132,9 +132,18 @@ function Data:MergeProfession(scan)
     end
 
     local added = AddNew(prof.items, scan.items) + AddNew(prof.enchants, scan.enchants)
+    -- Eneste undtagelse fra "et scan fjerner aldrig noget": lavere ranks af en recipe, man nu har i en
+    -- højere rank (Mainline). Scannet siger udtrykkeligt, hvilke det er.
+    local removed = 0
+    for id in pairs(scan.superseded or {}) do
+        if prof.enchants[id] then
+            prof.enchants[id] = nil
+            removed = removed + 1
+        end
+    end
     -- Nye reagents (fx første scan efter en opdatering) skal også ud til guilden.
     local newReagents = self:MergeReagents(scan.reagents)
-    if added > 0 or newReagents > 0 then
+    if added > 0 or removed > 0 or newReagents > 0 then
         self:MeChanged("recipes")
     end
     prof.scanned = time()

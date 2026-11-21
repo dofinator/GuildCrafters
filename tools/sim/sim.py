@@ -110,6 +110,7 @@ class World:
         self.sent = []       # log af alle beskeder: (tid, afsender, type-hint, bytes)
         self.ghosts = []     # guild-medlemmer uden addon: (navn, level, class, online)
         self.loss = 0.0      # andel af guild-beskeder, serveren taber for alle (tilfældigt)
+        self.chat_log = []   # chatlinjer: (tid, afsender, "GUILD"/"WHISPER", modtager, tekst)
         self.rng = random.Random(7)
 
     def roster(self):
@@ -138,6 +139,20 @@ class World:
         for r in receivers:
             self.queue.append((self.now + 0.1, r, prefix, text, channel, sender.key))
 
+    def chat(self, sender_key, guild, text, chat_type, target=None):
+        """En chatlinje fra en spiller (med eller uden addon) til guild-chatten eller som whisper."""
+        self.chat_log.append((self.now, sender_key.split("-")[0], chat_type, target, text))
+        if chat_type == "GUILD":
+            receivers = [c for c in self.clients if c.online and c.guild == guild]
+            event = "CHAT_MSG_GUILD"
+        elif chat_type == "WHISPER":
+            receivers = [c for c in self.clients if c.online and c.name == target.split("-")[0]]
+            event = "CHAT_MSG_WHISPER"
+        else:
+            receivers = []
+        for r in receivers:
+            self.queue.append((self.now + 0.1, r, None, text, event, sender_key))
+
     def step(self, seconds, dt=0.1):
         end = self.now + seconds
         while self.now < end:
@@ -145,7 +160,9 @@ class World:
             due = [m for m in self.queue if m[0] <= self.now]
             self.queue = [m for m in self.queue if m[0] > self.now]
             for _, client, prefix, text, channel, sender in due:
-                if client.online:
+                if client.online and prefix is None:        # chatlinje (se chat)
+                    client.L.globals().sim_fire(channel, text, sender)
+                elif client.online:
                     client.L.globals().sim_deliver(prefix, text, channel, sender)
             for c in self.clients:
                 if c.online:
@@ -182,6 +199,7 @@ class Client:
         g.sim_py_epoch = lambda: world.epoch
         g.sim_locale = locale
         g.sim_py_send = lambda p, t, ch, tg: world.send(self, p, t, ch, tg)
+        g.sim_py_chat = lambda t, ch, tg: world.chat(self.key, self.guild, t, ch, tg)
         g.sim_py_print = self._print
         g.sim_version = toc_version(self.base)
         g.sim_flavor = flavor
@@ -203,6 +221,7 @@ class Client:
                 "name": p["name"], "rank": p["rank"], "max": p["max"],
                 "recipes": L.table_from(p["recipes"]),
                 "reagents": L.table_from({k: L.table_from(v) for k, v in p.get("reagents", {}).items()}),
+                "ranks": L.table_from(p.get("ranks", {})),
             }))
         me.profs = L.table_from(prof_list)
         bag_tbl = L.table()
@@ -485,6 +504,21 @@ def scenario_alts():
     w.step(2)
     row = crafter_row(cara, "Brown Linen Vest")
     check(row.startswith("Crafter: Annalt") and "alt of" not in row, f"Crafteren står med det korte navn ({row})")
+    # Højreklik på Annalts Flask: Cara kan whispes, men ikke Anna, som er ens egen alt.
+    menu = annalt.L.eval("""function()
+        sim_menu = nil
+        for _, f in ipairs(sim_allFrames) do
+            local item = rawget(f, "item")
+            if item and rawget(f, "toggle") and f:IsVisible() and item.name == "Flask of the Titans" then
+                f.sim_scripts.OnClick(f, "RightButton")
+                break
+            end
+        end
+        local out = {}
+        for _, info in ipairs(sim_menu or {}) do table.insert(out, info.text) end
+        return table.concat(out, ";")
+    end""")()
+    check("Whisper Cara" in menu and "Anna" not in menu, f"Whisper-menuen foreslår ikke ens egen alt ({menu})")
     lua_errors(annalt, bob, cara)
 
 
@@ -589,9 +623,9 @@ def scenario_crafting():
     print("\nScenarie 8: reagents-sync, kategorier, stats-søgning og craft-liste")
     w = World()
     anna = Client(w, "Anna", "PRIEST", 60, profs=[ALCH], talents=(5, 31, 15),
-                  bags={0: [(13468, 3)]})
+                  bags={0: [(13468, 3), (10620, 5)]})              # Thorium Ore bruges ikke af craft-listen
     bob = Client(w, "Bob", "WARRIOR", 60, profs=[TAIL], talents=(5, 5, 41),
-                  bags={0: [(8925, 1), (2589, 10), (10620, 5)]})   # Thorium Ore bruges ikke af craft-listen
+                  bags={0: [(8925, 1), (2589, 10), (10620, 5)]})
     w.clients = [anna, bob]
     anna.login()
     bob.login()
@@ -799,7 +833,7 @@ def scenario_crafting():
     mats_count = bob.L.eval("""function()
         for _, f in ipairs(sim_allFrames) do
             local t = rawget(f, "sim_text")
-            if type(t) == "string" and t:find("^%d+ mats") then return tonumber(t:match("^(%d+)")) end
+            if type(t) == "string" and t:find("^%d+ mats?") then return tonumber(t:match("^(%d+)")) end
         end
     end""")
     total = mats_count()
@@ -842,7 +876,7 @@ def scenario_tour():
     errors = [f"{e.step}: {e.msg}" for _, e in report.errors.items()]
     check(len(steps) == 16 and report.shotsOk == 16, f"16 trin med screenshot ({len(steps)} trin, {report.shotsOk} screenshots)")
     check(not errors, "Ingen fejl under rundturen" + (f" ({errors[0]})" if errors else ""))
-    check(sum("added to your craft list" in p for p in bob.prints) == 3, "Tre recipes lagt i craft-listen undervejs")
+    check(not any("added to your craft list" in p for p in bob.prints), "Ingen chat-linje for hver recipe, der lægges på listen")
     cl = [(e.kind, e.id, e.qty) for _, e in bob.g.GuildCraftersDB.craftList.items()]
     check(cl == [("i", 2996, 4)], f"Craft-listen er genskabt bagefter ({cl})")
     check(len(report.tabs) == 4, "Fanernes placering er med i rapporten")
@@ -2142,6 +2176,311 @@ def scenario_review():
     lua_errors(mia)
 
 
+def scenario_ux2():
+    print("\nScenarie 24: UX-runde 0.16 - har/skal bruge, Mats som Crafting, mindre støj, ranks")
+    # Tailoring med en ekstra (opdigtet) recipe, der også bruger Linen Cloth, så to items deler en mat.
+    tail = {"name": "Tailoring", "rank": 75, "max": 75, "recipes": [2996, 2568, 14047],
+            "reagents": {2996: [2589, 2], 2568: [2996, 2], 14047: [2589, 3]}}
+    w = World()
+    me = Client(w, "Pepsi", "PRIEST", 34, profs=[tail, dict(ENCH)], talents=(5, 31, 15),
+                bags={0: [(2589, 4), (8925, 1)]})
+    anna = Client(w, "Anna", "DRUID", 60, profs=[ALCH], talents=(5, 31, 15),
+                  bags={0: [(13468, 3), (8925, 20), (10620, 5)]})
+    bob = Client(w, "Bob", "WARRIOR", 60, profs=[TAIL], talents=(5, 5, 41), bags={0: [(2589, 60)]})
+    w.clients = [me, anna, bob]
+    for c in (me, anna, bob):
+        c.login()
+    me.open_trade("Tailoring")
+    me.open_craft("Enchanting")
+    anna.open_trade("Alchemy")
+    bob.open_trade("Tailoring")
+    anna.slash("mats on")
+    bob.slash("mats on")
+    w.step(200)
+    ns, L, g = me.ns, me.L, me.g
+
+    # --- Mindre støj: reagens-navne i tooltippen, ingen chat-linje pr. klik, Lvl-kolonnen ---
+    me.slash("")
+    ns.UI.ShowTab(ns.UI, "Crafting")
+    hover = L.eval("""function(name)
+        for _, f in ipairs(sim_allFrames) do
+            local item = rawget(f, "item")
+            if item and item.keys and item.name == name and rawget(f, "crafters") and f:IsVisible() then
+                f.sim_scripts.OnEnter(f)
+                return true
+            end
+        end
+    end""")
+    tip = lambda: [_strip(l) for _, l in g.GameTooltip.sim_lines.items()]
+    w.step(1.5)                                 # rækkerne er der; reagensernes navne er på vej fra serveren
+    hover("Flask of the Titans")
+    early = tip()
+    check(any("Loading" in l for l in early), f"(forudsætning) lige efter åbning mangler reagens-navnene ({early[-6:-3]})")
+    w.step(3)                                   # de kommer, mens tooltippen er fremme: den vises igen
+    lines = tip()
+    check(any("1x Black Lotus" in l for l in lines) and any("1x Crystal Vial" in l for l in lines)
+          and not any("Loading" in l for l in lines),
+          f"Tooltippen opdateres, når reagens-navnene kommer ({lines[-6:-3]})")
+    hover("Bolt of Linen Cloth")                # navnene blev bestilt, da rækken blev vist
+    lines = tip()
+    check(any("2x Linen Cloth" in l for l in lines) and not any("Loading" in l for l in lines),
+          f"Reagens-navne er klar ved første hover, ikke \"Loading...\" ({lines[-6:-3]})")
+
+    me.prints.clear()
+    plus = L.eval("""function(name)
+        for _, f in ipairs(sim_allFrames) do
+            local item = rawget(f, "item")
+            if item and item.keys and item.name == name and rawget(f, "crafters") and f:IsVisible() then
+                f.add.sim_scripts.OnClick(f.add)
+                return f.onList.sim_text
+            end
+        end
+    end""")
+    plus("Bolt of Linen Cloth")
+    plus("Runecloth")
+    entry, _ = ns.Data.CraftListFind(ns.Data, "i", 2996)
+    check(entry is not None and entry.qty == 1 and not any("craft list" in p for p in me.prints),
+          f"+ lægger på listen uden en linje i chatten ({me.prints})")
+    w.step(1)
+    on_list = L.eval("""function(name)
+        for _, f in ipairs(sim_allFrames) do
+            local item = rawget(f, "item")
+            if item and item.keys and item.name == name and rawget(f, "crafters") and f:IsVisible() then
+                return f.onList.sim_text
+            end
+        end
+    end""")
+    check(_strip(on_list("Bolt of Linen Cloth")) == "x1", f"Rækken viser selv, at den står på listen ({on_list('Bolt of Linen Cloth')})")
+
+    header_shown = L.eval("""function(label)
+        for _, f in ipairs(sim_allFrames) do
+            local text = rawget(f, "text")
+            if type(text) == "table" and text.sim_text == label and rawget(f, "arrow") and f:IsVisible() then return true end
+        end
+        return false
+    end""")
+    click_cat = L.eval("""function(kind, name)
+        for _, f in ipairs(sim_allFrames) do
+            local e = rawget(f, "entry")
+            if e and e.type == kind and (not name or e.name == name) and f:IsVisible() then
+                f.sim_scripts.OnClick(f)
+                return true
+            end
+        end
+    end""")
+    check(header_shown("Lvl"), "Alle recipes: Lvl-kolonnen vises (items med level)")
+    click_cat("top", "Enchants")
+    check(not header_shown("Lvl") and header_shown("Crafters"), "Kun enchants: Lvl-kolonnen er skjult")
+    click_cat("all")
+    check(header_shown("Lvl"), "... og kommer igen, når listen har items med level")
+
+    # --- Craft List: har/skal bruge ---
+    ns.UI.ShowTab(ns.UI, "Craft List")
+    w.step(2)
+    # Bolt of Linen Cloth er Ready og derfor foldet sammen: fold den ud, så dens mat også kan ses.
+    L.execute("""for _, f in ipairs(sim_allFrames) do
+        local item = rawget(f, "item")
+        if item and item.entry and item.name == "Bolt of Linen Cloth" and f:IsVisible() then
+            f.toggle.sim_scripts.OnClick(f.toggle) break
+        end
+    end""")
+    mats = L.eval("""function()
+        local out = {}
+        for _, f in ipairs(sim_allFrames) do
+            local item = rawget(f, "item")
+            if item and item.need and f:IsVisible() then
+                table.insert(out, item.forName .. "|" .. f.have.sim_text)
+            end
+        end
+        return out
+    end""")
+    rows = [r.split("|", 1) for _, r in mats().items()]
+    plain = {name: _strip(text) for name, text in rows}
+    raw = dict(rows)
+    check(plain == {"Bolt of Linen Cloth": "4/2", "Runecloth": "4/3"}, f"Mats vises som har/skal bruge ({plain})")
+    check("40ff40" in raw["Bolt of Linen Cloth"] and "ff6060" in raw["Runecloth"],
+          "Grøn, når der er nok; rød, når resten er brugt af et item højere oppe")
+    summary = L.eval("""function()
+        for _, f in ipairs(sim_allFrames) do
+            local t = rawget(f, "sim_text")
+            if type(t) == "string" and t:find("ready", 1, true) and f.sim_kind == "FontString" and f:IsVisible() then return t end
+        end
+    end""")
+    text = _strip(summary())
+    check(text == "1 of 2 ready · still to get: 1 Linen Cloth", f"Toplinjen siger, hvad der mangler i alt ({text})")
+    L.execute("""for _, f in ipairs(sim_allFrames) do
+        local item = rawget(f, "item")
+        if item and item.need and item.forName == "Runecloth" and f:IsVisible() then f.sim_scripts.OnEnter(f) break end
+    end""")
+    lines = tip()
+    check("You have | 4" in lines and "Set aside for items above | 2" in lines,
+          f"Tooltippen forklarer, hvorfor 4/3 er rød ({lines[2:6]})")
+    ns.Data.CraftListSetQty(ns.Data, "i", 14047, 0)
+    w.step(1)
+    check(_strip(summary()) == "All 1 ready - you have every mat", f"Alt klar: toplinjen siger det ({_strip(summary())})")
+
+    # --- Mats: én linje pr. mat som i Crafting, uden ens egen char ---
+    ns.UI.ShowTab(ns.UI, "Mats")
+    w.step(2)
+    mats_rows = L.eval("""function()
+        local out = {}
+        for _, f in ipairs(sim_allFrames) do
+            local item = rawget(f, "item")
+            if item and rawget(f, "holders") and f:IsVisible() then
+                table.insert(out, item.name .. "|" .. f.holders.sim_text)
+            end
+        end
+        return out
+    end""")
+
+    def shown():
+        return [tuple(_strip(r).split("|", 1)) for _, r in mats_rows().items()]
+    check(shown() == [("Black Lotus", "Anna 3"), ("Crystal Vial", "Anna 20"), ("Linen Cloth", "Bob 60"),
+                      ("Thorium Ore", "Anna 5")], f"Én linje pr. mat med korte navne, uden ens egne ({shown()})")
+    L.execute("""for _, f in ipairs(sim_allFrames) do
+        local text = rawget(f, "text")
+        if type(text) == "table" and text.sim_text == "Who has it" and f:IsVisible() then f.sim_scripts.OnClick(f) break end
+    end""")
+    check([r[0] for r in shown()][:2] == ["Linen Cloth", "Crystal Vial"], f"Klik på \"Who has it\": mest først ({shown()})")
+    L.execute("""for _, f in ipairs(sim_allFrames) do
+        local item = rawget(f, "item")
+        if item and rawget(f, "holders") and item.name == "Crystal Vial" and f:IsVisible() then f.sim_scripts.OnEnter(f) break end
+    end""")
+    lines = tip()
+    check(any(l.startswith("Anna 20 (bags)") for l in lines) and "You have | 1" in lines,
+          f"Tooltippen har tasker/bank og hvad man selv har ({lines})")
+    anna.g.sim_fire("GUILDBANKFRAME_OPENED")        # guild banken står sidst på rækken
+    w.step(20)
+    thorium = dict(shown()).get("Thorium Ore")
+    check(thorium == "Anna 5 · Guild bank 40", f"Guild banken står på samme linje ({thorium})")
+    saved = me.logout()
+    check('"amount"' in saved, "Sorteringen i Mats huskes")
+    lua_errors(me, anna, bob)
+
+    # --- Ranks (Mainline): samme recipe i flere ranks vises kun én gang ---
+    w = World()
+    mia = _player(w, "Mia", [ENCH], flavor="mainline")
+    ben = _player(w, "Ben", [TAIL], flavor="mainline")
+    _join(w, mia, 2)
+    _join(w, ben, 90)
+    check(ben.recipe_ids(mia.key) == {("e", 7418), ("e", 13646)}, "Uden ranks: begge enchants er med")
+    mia.L.execute("sim_me.profs[1].ranks = { [7418] = 13646 }")     # 13646 er en højere rank af 7418
+    mia.open_craft("Enchanting")
+    w.step(60)
+    mine = {i for i in mia.db.myChars[mia.key].profs.Enchanting.enchants.keys()}
+    check(mine == {13646}, f"Kun den højeste rank, man har lært, er gemt ({mine})")
+    check(ben.recipe_ids(mia.key) == {("e", 13646)}, "... og den lavere forsvinder også hos de andre")
+    lua_errors(mia, ben)
+
+
+def scenario_craft_chat():
+    print("\nScenarie 25: !craft <item> i guild-chatten og som whisper")
+    w = World()
+    w.ghosts = [("Upn", 30, "WARRIOR", True)]      # spørger uden addon
+    upn = f"Upn-{REALM}"
+    anna = _player(w, "Anna", [ALCH])
+    bob = _player(w, "Bob", [TAIL], flavor="mainline")
+    cara = _player(w, "Cara", [ENCH])
+    old = _player(w, "Olga", [], source="v0.15.0")  # den udgivne version kender ikke ANS
+    for c in (anna, bob, cara, old):
+        _join(w, c, 2)
+    w.step(120)
+
+    def ask(text, wait=15, target=None):
+        start = len(w.chat_log)
+        w.chat(upn, GUILD, text, "WHISPER" if target else "GUILD", target)
+        w.step(wait)
+        return [(who, kind, tgt, t) for _, who, kind, tgt, t in w.chat_log[start + 1:]]
+
+    replies = ask("!craft titans")
+    check(len(replies) == 1 and replies[0][0] == "Anna" and replies[0][1] == "GUILD",
+          f"Én svarer i guild-chatten, den første efter navn ({replies})")
+    check(replies and replies[0][3].endswith("[Flask of the Titans]|h|r: online Anna"),
+          f"Svaret er linket og crafteren ({replies and replies[0][3]})")
+
+    replies = ask("!craft titans")
+    check(replies == [], f"Samme spørgsmål lige efter besvares ikke igen ({replies})")
+
+    replies = ask("!CRAFT  Bracer")
+    check(len(replies) == 1 and replies[0][3] == "2 matches: Enchant Bracer - Lesser Deflection, "
+          "Enchant Bracer - Minor Health. Be more specific.", f"Flere recipes passer ({replies})")
+
+    replies = ask("!craft dragonscale cloak")
+    check([r[3] for r in replies] == ['Nobody with GuildCrafters can craft "dragonscale cloak".'],
+          f"Ingen kan crafte det ({replies})")
+
+    link = "|cffffffff|Hitem:2568::::::::|h[Brown Linen Vest]|h|r"
+    replies = ask("!craft " + link)
+    check([r[3] for r in replies] == [link + ": online Bob"], f"Et item-link i spørgsmålet ({replies})")
+
+    replies = ask("!craft bolt of linen cloth")
+    check([r[3] for r in replies] == ["|cffffffff|Hitem:2996::::::::|h[Bolt of Linen Cloth]|h|r: online Bob"],
+          f"Hele navnet passer præcis ({replies})")
+
+    for text in ("!craft", "!crafting titans", "can someone !craft titans", "craft titans"):
+        check(ask(text, 10) == [], f"Ingen svar på {text!r}")
+
+    anna.slash("answer off")
+    replies = ask("!craft healing potion")
+    check([(r[0], r[3]) for r in replies] == [("Bob", "|cffffffff|Hitem:13446::::::::|h[Major Healing Potion]|h|r: online Anna")],
+          f"Med /gc answer off svarer den næste (Bob, Mainline) ({replies})")
+    anna.slash("answer on")
+
+    anna.combat(True)
+    replies = ask("!craft minor health")
+    check([r[0] for r in replies] == ["Bob"], f"Den første i rækken er i kamp: den næste svarer ({replies})")
+    anna.combat(False)
+    w.step(10)
+
+    # Sikringer mod dobbelte svar: i en instance svarer man ikke selv, og et tabt ANS opdages i chatten.
+    anna.g.sim_inInstance = True
+    replies = ask("!craft lesser deflection")
+    check([r[0] for r in replies] == ["Bob"], f"Den første i rækken er i en instance: den næste svarer ({replies})")
+    anna.g.sim_inInstance = False
+    anna.guild_muted = True                         # Annas ANS når ikke frem, men hendes chatlinje gør
+    replies = ask("!craft vest")
+    check([r[0] for r in replies] == ["Anna"],
+          f"ANS gik tabt: de andre ser Annas svar i chatten og dropper deres eget ({replies})")
+    anna.guild_muted = False
+    w.step(30)
+    start = len(w.chat_log)
+    w.chat(upn, GUILD, "!craft titans", "GUILD")
+    w.step(0.2)
+    w.chat(bob.key, GUILD, "Flask of the Titans: online Bob", "GUILD")    # ligner et svar, men uden link
+    w.chat(bob.key, GUILD, "[Brown Linen Vest]: online Bob", "GUILD")      # svar på noget andet
+    w.step(15)
+    check([r[1] for r in w.chat_log[start + 3:]] == ["Anna"],
+          f"Et svar på et andet spørgsmål stopper ikke svaret ({w.chat_log[start + 3:]})")
+
+    # Whisper: svaret kommer som whisper, kun til guild-medlemmer.
+    replies = ask("!craft linen vest", 5, target=cara.key)
+    check(replies == [("Cara", "WHISPER", "Upn", "|cffffffff|Hitem:2568::::::::|h[Brown Linen Vest]|h|r: online Bob")],
+          f"Whisper giver svaret som whisper ({replies})")
+    replies = ask("!craft", 5, target=cara.key)
+    check([r[3] for r in replies] == ["Usage: !craft <item name or link>"], f"Tom whisper giver en hjælpelinje ({replies})")
+    start = len(w.chat_log)
+    w.chat(f"Stranger-{REALM}", None, "!craft titans", "WHISPER", cara.key)
+    w.step(5)
+    check(len(w.chat_log) == start + 1, "Whisper fra en uden for guilden besvares ikke")
+    cara.combat(True)
+    replies = ask("!craft deflection", 5, target=cara.key)
+    check(replies == [], "Whisper i kamp venter ...")
+    cara.combat(False)
+    w.step(2)
+    check(len(w.chat_log) and w.chat_log[-1][1] == "Cara" and "online Cara" in w.chat_log[-1][4],
+          f"... og besvares efter kampen ({w.chat_log[-1]})")
+
+    # Offline crafters står efter de online, og testfigurer kommer aldrig i chatten.
+    anna.logout()
+    w.step(30)
+    bob.slash("debug fake 15")
+    replies = ask("!craft titans")
+    check([(r[0], r[3]) for r in replies] == [("Bob", "|cffffffff|Hitem:13510::::::::|h[Flask of the Titans]|h|r: offline Anna")],
+          f"Offline crafter, svaret af den næste online ({replies})")
+    check(all(len(t) <= 255 for _, _, _, _, t in w.chat_log), "Alle chatlinjer er højst 255 bytes")
+    lua_errors(anna, bob, cara, old)
+
+
 if __name__ == "__main__":
     scenario_sync()
     scenario_relay()
@@ -2165,6 +2504,8 @@ if __name__ == "__main__":
     scenario_combat()
     scenario_status()
     scenario_review()
+    scenario_ux2()
+    scenario_craft_chat()
     print()
     if failures:
         print(f"{len(failures)} FEJL")

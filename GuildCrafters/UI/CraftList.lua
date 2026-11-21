@@ -1,7 +1,9 @@
 local _, ns = ...
 
 -- Craft List-fanen: ens personlige liste over ting, man vil have craftet. Hvert item står med sine
--- mats lige under sig i kolonner (Need / You have / Guild has), og med status Ready / Missing.
+-- mats lige under sig i kolonner (Have / Guild has), og med status Ready / Missing. "Have" skrives som i
+-- spillets eget profession-vindue: "2/5" = man har 2, og itemet skal bruge 5 (valgt af brugeren ud fra
+-- en før/efter-skitse, v0.16).
 local UI = ns.UI
 
 local ROW = 20
@@ -12,8 +14,9 @@ local COL = {
     toggle = 2, icon = 20, name = 42,       -- item-række: fold-knap, ikon, navn
     matIcon = 42, matName = 60,             -- mat-række (indrykket under item-navnet)
     qty = 262, buttons = 300,
-    need = { right = 344 }, have = { right = 424 }, guild = 444,
+    have = { right = 414 }, guild = 434,
 }
+local MAX_SHORT = 2             -- mats nævnt i toplinjen ("still to get: ..."), resten som "+N more"
 
 local rows = {}
 local data = {}
@@ -104,12 +107,14 @@ local function CanCraftText(keys)
     return UI.PersonText(keys[1]) .. " can craft it"
 end
 
--- Én række pr. item efterfulgt af dets mats. "You have" fordeles ovenfra og ned, så to items,
--- der bruger samme mat, ikke begge regner med de samme stk.
+-- Én række pr. item efterfulgt af dets mats. Beholdningen fordeles ovenfra og ned (have), så to items,
+-- der bruger samme mat, ikke begge regner med de samme stk.; det afgør Ready/Missing og farven.
+-- Rækken viser derimod alt, man har (own): "0" på de nederste items lignede, at man intet havde.
+-- Returnerer antal Ready og det, der mangler i alt på tværs af listen: { { id, name, count }, ... }.
 local function BuildData()
     wipe(data)
-    local pool = {}
-    local ready, missingIds, missingCount = 0, {}, 0
+    local pool, owned, totalNeed, order = {}, {}, {}, {}
+    local ready = 0
     for _, e in ipairs(ns.db.craftList) do
         local name = ns.Index.Name(e.kind, e.id) or "Loading..."
         local item = {
@@ -129,21 +134,21 @@ local function BuildData()
             local missing = 0
             local mats = {}
             for _, r in ipairs(reagents) do
-                if pool[r.id] == nil then pool[r.id] = ns.Index:OwnCount(r.id) end
+                if pool[r.id] == nil then
+                    owned[r.id] = ns.Index:OwnCount(r.id)
+                    pool[r.id] = owned[r.id]
+                    totalNeed[r.id] = 0
+                    table.insert(order, r.id)
+                end
                 local need, have = r.count * crafts, pool[r.id]
                 pool[r.id] = math.max(0, have - need)
-                if have < need then
-                    missing = missing + 1
-                    if not missingIds[r.id] then
-                        missingIds[r.id] = true
-                        missingCount = missingCount + 1
-                    end
-                end
+                totalNeed[r.id] = totalNeed[r.id] + need
+                if have < need then missing = missing + 1 end
                 local matName = ns.Compat.ItemName(r.id) or "Loading..."
                 table.insert(mats, {
                     id = r.id, name = matName, title = UI.ItemTitle(r.id, matName),
                     icon = ns.Compat.ItemIcon(r.id),
-                    need = need, have = have, forName = name,
+                    need = need, have = have, own = owned[r.id], forName = name,
                     guild = GuildHasText(r.id), keys = OtherHolders(r.id),
                     crafters = ns.Index:Crafters("i", r.id),
                     hyperlink = "item:" .. r.id,
@@ -164,7 +169,14 @@ local function BuildData()
                 .. "and must open the profession once." })
         end
     end
-    return ready, missingCount
+    local short = {}
+    for _, id in ipairs(order) do
+        if totalNeed[id] > owned[id] then
+            table.insert(short, { id = id, name = ns.Compat.ItemName(id) or "Loading...",
+                count = totalNeed[id] - owned[id] })
+        end
+    end
+    return ready, short
 end
 
 ------------------------------------------------------------------------
@@ -192,7 +204,11 @@ local function MaterialTooltip(item, row)
     GameTooltip:SetHyperlink(item.hyperlink)
     GameTooltip:AddLine(" ")
     GameTooltip:AddDoubleLine("Needed for " .. item.forName, item.need, 1, 0.82, 0, 1, 1, 1)
-    GameTooltip:AddDoubleLine("You have", item.have, 1, 0.82, 0, 1, 1, 1)
+    GameTooltip:AddDoubleLine("You have", item.own, 1, 0.82, 0, 1, 1, 1)
+    if item.own > item.have then
+        -- Derfor kan "6/5" stå i rød: resten er allerede brugt af items højere oppe på listen.
+        GameTooltip:AddDoubleLine("Set aside for items above", item.own - item.have, 1, 0.82, 0, 1, 1, 1)
+    end
     local holders = GuildHolders(item.id)
     if #holders > 0 then GameTooltip:AddLine("In the guild (online first):", 1, 0.82, 0) end
     for _, h in ipairs(holders) do
@@ -319,8 +335,6 @@ local function CreateRow(content, index)
     row.qty:SetPoint("LEFT", COL.qty, 0)
     row.status = Text(row, "GameFontHighlightSmall", "RIGHT")
     row.status:SetPoint("RIGHT", -6, 0)
-    row.need = Text(row, "GameFontHighlightSmall", "RIGHT")
-    row.need:SetPoint("RIGHT", row, "LEFT", COL.need.right, 0)
     row.have = Text(row, "GameFontHighlightSmall", "RIGHT")
     row.have:SetPoint("RIGHT", row, "LEFT", COL.have.right, 0)
     row.guild = Text(row, "GameFontHighlightSmall")
@@ -369,7 +383,6 @@ local function ShowItemRow(row, item)
         row.status:SetText(string.format("|cffff6060Missing %d mat%s|r", item.missing,
             item.missing == 1 and "" or "s"))
     end
-    row.need:SetText("")
     row.have:SetText("")
     row.guild:SetPoint("RIGHT", row.status, "LEFT", -8, 0)
     row.guild:SetText(item.crafter)    -- samme kolonne som "Guild has" på mat-rækkerne
@@ -385,14 +398,13 @@ local function ShowMaterialRow(row, item)
     row.icon:Show()
     row.name:SetFontObject("GameFontHighlightSmall")
     row.name:SetPoint("LEFT", COL.matName, 0)
-    row.name:SetWidth(COL.need.right - 40 - COL.matName)
+    row.name:SetWidth(COL.have.right - 70 - COL.matName)
     row.name:SetText(item.title)
     row.qty:SetText("")
     row.status:SetText("")
-    row.need:SetText(item.need)
     row.guild:SetPoint("RIGHT", row, "RIGHT", -6, 0)
     local enough = item.have >= item.need
-    row.have:SetText((enough and "|cff40ff40" or "|cffff6060") .. item.have .. "|r")
+    row.have:SetText(string.format("%s%d/%d|r", enough and "|cff40ff40" or "|cffff6060", item.own, item.need))
     if item.guild then
         row.guild:SetText(item.guild)
     elseif enough then
@@ -415,7 +427,6 @@ local function ShowNoteRow(row, item)
     row.name:SetText(item.note)
     row.qty:SetText("")
     row.status:SetText("")
-    row.need:SetText("")
     row.have:SetText("")
     row.guild:SetText("")
     for _, b in ipairs(row.buttons) do b:Hide() end
@@ -448,15 +459,24 @@ end
 
 Refresh = function()
     if not scroll then return end
-    local ready, missing = BuildData()
+    local ready, short = BuildData()
     local count = #ns.db.craftList
     if count == 0 then
         summary:SetText("")
     elseif ready == count then
         summary:SetText(string.format("|cff40ff40All %d ready|r - you have every mat", count))
     else
-        summary:SetText(string.format("%d of %d ready - |cffff6060%d mat%s missing|r", ready, count,
-            missing, missing == 1 and "" or "s"))
+        -- Det, der mangler i alt på tværs af listen: det er det, man skal ud og skaffe.
+        local text = string.format("%d of %d ready", ready, count)
+        local parts = {}
+        for i = 1, math.min(#short, MAX_SHORT) do
+            parts[i] = short[i].count .. " " .. short[i].name
+        end
+        if #parts > 0 then
+            text = text .. " · |cffff6060still to get:|r " .. table.concat(parts, ", ")
+            if #short > #parts then text = text .. string.format(" |cffaaaaaa+%d more|r", #short - #parts) end
+        end
+        summary:SetText(text)
     end
     empty:SetShown(count == 0)
     UpdateRows()
@@ -479,6 +499,9 @@ local function Build(content)
 
     summary = content:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
     summary:SetPoint("LEFT", title, "RIGHT", 16, 0)
+    summary:SetPoint("RIGHT", content, "RIGHT", -130, 0)      -- frem til Clear list
+    summary:SetJustifyH("LEFT")
+    summary:SetWordWrap(false)
 
     local clear = CreateFrame("Button", nil, content, "UIPanelButtonTemplate")
     clear:SetSize(90, 22)
@@ -496,8 +519,7 @@ local function Build(content)
     end)
 
     Header(content, "MATERIAL", COL.matName)
-    Header(content, "NEED", COL.need.right, true)
-    Header(content, "YOU HAVE", COL.have.right, true)
+    Header(content, "HAVE", COL.have.right, true)
     Header(content, "GUILD HAS", COL.guild)
 
     local height = UI.CONTENT_HEIGHT + LIST_TOP - UI.FOOTER_HEIGHT - 4

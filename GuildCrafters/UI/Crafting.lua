@@ -31,6 +31,7 @@ local catScroll, scroll, divider, headerBar, hint, empty, footer
 local searchBox, usableCheck, onlineCheck
 local catRows, rows = {}, {}
 local catVisible, rowsVisible = 0, 0
+local showLevel = true      -- Lvl-kolonnen vises kun, når noget på listen har et level
 local catEntries, data = {}, {}
 local headers = {}
 local collapsed = {}        -- ["Tailoring"] / ["Tailoring/Trade Goods"] = true (huskes denne session)
@@ -193,12 +194,10 @@ local function Availability(keys)
     return 1
 end
 
--- + lægger 1 på listen; shift-klik lægger 5 på (fx potions eller bolts).
+-- + lægger 1 på listen; shift-klik lægger 5 på (fx potions eller bolts). Ingen linje i chatten:
+-- rækken viser selv "x2" i grøn, og en linje pr. klik var bare støj.
 local function AddToList(item)
-    local qty = IsShiftKeyDown() and 5 or 1
-    ns.Data:CraftListAdd(item.kind, item.id, qty)
-    local entry = ns.Data:CraftListFind(item.kind, item.id)
-    ns:Print(string.format("%s added to your craft list (x%d).", item.name, entry and entry.qty or qty))
+    ns.Data:CraftListAdd(item.kind, item.id, IsShiftKeyDown() and 5 or 1)
 end
 
 -- Reagents i tooltippen, med hvor mange man selv har.
@@ -225,6 +224,7 @@ end
 
 local function ShowResultTooltip(item, row)
     GameTooltip:SetOwner(row, "ANCHOR_RIGHT")
+    row.tipItem = item
     GameTooltip:SetHyperlink(item.hyperlink)
     -- Items får "Crafted by" fra den globale tooltip-hook; enchants skal have det her.
     if item.kind == "e" then
@@ -393,9 +393,10 @@ local function ShowRecipeRow(row, d)
     row.icon:Show()
     row.label:SetFontObject("GameFontHighlightSmall")
     row.label:SetPoint("LEFT", COL.name + indent, 0)
-    row.label:SetWidth(COL.nameWidth - indent)
+    -- Uden Lvl-kolonne får navnet pladsen.
+    row.label:SetWidth(COL.nameWidth - indent + (showLevel and 0 or COL.levelRight - COL.nameWidth - COL.name))
     row.label:SetText(d.title)
-    row.right:SetText(d.levelText)
+    row.right:SetText(showLevel and d.levelText or "")
     -- Én person er valgt: alle rækker har samme crafter, så kolonnen er tom.
     row.crafters:SetText(state.crafter and "" or d.crafters)
     local entry = ns.Data:CraftListFind(d.kind, d.id)
@@ -413,8 +414,20 @@ local function UpdateRows()
         if not d then
             row:Hide()
         else
-            if d.header then ShowHeaderRow(row, d) else ShowRecipeRow(row, d) end
+            if d.header then
+                ShowHeaderRow(row, d)
+            else
+                ShowRecipeRow(row, d)
+                -- Bestil navnene på reagenserne nu, så tooltippen ikke står med "Loading...", når man
+                -- holder musen over rækken.
+                local _, reagents = ns.Index:Reagents(d.kind, d.id)
+                for _, r in ipairs(reagents or {}) do ns.Compat.ItemName(r.id) end
+            end
             row:Show()
+            -- Er tooltippen for rækken allerede fremme (navne kom lige fra serveren), så vis den igen.
+            if row.item and row.tipItem and GameTooltip:IsShown() and GameTooltip:IsOwned(row) then
+                ShowResultTooltip(row.item, row)
+            end
         end
     end
     FauxScrollFrame_Update(scroll, #data, rowsVisible, ROW)
@@ -489,7 +502,10 @@ local function CreateRow(content, index)
     row:SetScript("OnEnter", function(self)
         if self.item then ShowResultTooltip(self.item, self) end
     end)
-    row:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    row:SetScript("OnLeave", function(self)
+        self.tipItem = nil
+        GameTooltip:Hide()
+    end)
     return row
 end
 
@@ -599,6 +615,15 @@ Refresh = function()
         if key == saved.sortKey then header:SetSort(saved.sortDesc) else header:SetSort(nil) end
     end
     headers.crafters:SetShown(not state.crafter)
+    -- Lvl-kolonnen er tom for enchants og ting uden krav: vis den kun, når den siger noget.
+    showLevel = false
+    for _, item in ipairs(items) do
+        if item.level > 1 then
+            showLevel = true
+            break
+        end
+    end
+    headers.level:SetShown(showLevel)
 
     local status
     if state.crafter then

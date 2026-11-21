@@ -132,8 +132,9 @@ function Methods:GetEffectiveScale() return 1 end
 function Methods:GetCenter() return 0, 0 end
 
 -- Tooltip
-function Methods:SetOwner(owner) self.sim_lines = {} self.sim_owner = owner end
+function Methods:SetOwner(owner) self.sim_lines = {} self.sim_owner = owner self.sim_shown = true end
 function Methods:GetOwner() return rawget(self, "sim_owner") end
+function Methods:IsOwned(frame) return rawget(self, "sim_owner") == frame end
 local function SetLineText(self, i, text)
     local name = rawget(self, "sim_name")
     if not name then return end
@@ -662,6 +663,20 @@ function sim_deliver(prefix, text, channel, sender)
     if prefixes[prefix] then sim_fire("CHAT_MSG_ADDON", prefix, text, channel, sender) end
 end
 
+sim_inInstance = false
+function IsInInstance()
+    if sim_inInstance then return true, "raid" end
+    return false, "none"
+end
+
+-- Chatlinjer (fx svaret på "!craft"): sim.py leverer dem som CHAT_MSG_GUILD / CHAT_MSG_WHISPER.
+sim_chatSent = {}
+function SendChatMessage(text, chatType, lang, target)
+    assert(type(text) == "string" and #text <= 255, "chatlinje over 255 bytes")
+    table.insert(sim_chatSent, { text = text, chatType = chatType, target = target })
+    sim_py_chat(text, chatType, target)
+end
+
 ------------------------------------------------------------------------
 -- Mainline-profil (retail / WoW Forever): sim_flavor == "mainline"
 -- De gamle Classic-globaler fjernes, og C_-navnerummene, der erstatter dem, tilføjes. Listen over,
@@ -678,6 +693,8 @@ if sim_flavor == "mainline" then
     sim_lockdown = false
     C_ChatInfo.InChatMessagingLockdown = function() return sim_lockdown end
     C_ChatInfo.AreOutgoingAddonChatMessagesRestricted = function() return sim_lockdown end
+    -- Retail 11.2+: SendChatMessage ligger i C_ChatInfo.
+    C_ChatInfo.SendChatMessage, SendChatMessage = SendChatMessage, nil
 
     -- Items og spells
     C_Item = {
@@ -716,8 +733,13 @@ if sim_flavor == "mainline" then
             table.insert(ids, UNLEARNED)
             return ids
         end,
+        -- p.ranks = { [lavere rank] = højere rank }: samme recipe i flere ranks, hver sit ID.
         GetRecipeInfo = function(recipeID)
-            return { recipeID = recipeID, learned = recipeID ~= UNLEARNED }
+            local p = OpenProf()
+            local base = (p and p.name ~= "Enchanting") and RECIPE_BASE or 0
+            local higher = p and p.ranks and p.ranks[recipeID - base]
+            return { recipeID = recipeID, learned = recipeID ~= UNLEARNED,
+                nextRecipeID = higher and (higher + base) or nil }
         end,
         GetRecipeSchematic = function(recipeID)
             local p = OpenProf()

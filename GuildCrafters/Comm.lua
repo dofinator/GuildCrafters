@@ -301,6 +301,7 @@ local function IsSecret(...)
     end
     return false
 end
+Comm.IsSecret = IsSecret     -- også til chat-events (se Answer.lua)
 
 function Comm:OnCommReceived(prefix, text, distribution, sender)
     if IsSecret(prefix, text, sender) then return end

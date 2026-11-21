@@ -144,6 +144,24 @@ function Compat.Whisper(key, message)
     end
 end
 
+-- Sender en chatlinje ("GUILD" eller "WHISPER" til key). Retail har flyttet funktionen til C_ChatInfo
+-- (11.2). pcall: hvis klienten spærrer chat fra addons (fx under en encounter), må det ikke give en fejl.
+-- Ikke set i en Mainline-klient endnu.
+function Compat.SendChat(text, chatType, key)
+    local send = (C_ChatInfo and C_ChatInfo.SendChatMessage) or SendChatMessage
+    if not send then return false end
+    return (pcall(send, text, chatType, nil, key and Compat.ChatName(key) or nil))
+end
+
+-- Første item- eller enchant-link i en chattekst: "i", itemID eller "e", spellID (nil uden link).
+-- Enchant-recipes er "enchant:"-links i Classic og "spell:"-links på Mainline.
+function Compat.LinkRecipe(text)
+    local id = text:match("|Hitem:(%d+)")
+    if id then return "i", tonumber(id) end
+    id = text:match("|Henchant:(%d+)") or text:match("|Hspell:(%d+)")
+    if id then return "e", tonumber(id) end
+end
+
 -- Indsætter et link i den åbne chatboks (shift-klik).
 local insertingOwnLink = false
 function Compat.InsertLink(link)
@@ -196,6 +214,13 @@ end
 -- retter op bagefter (som ved tabte beskeder).
 function Compat.InCombat()
     return InCombatLockdown ~= nil and InCombatLockdown() and true or false
+end
+
+-- Er spilleren inde i en dungeon, raid, battleground eller arena?
+function Compat.InInstance()
+    if not IsInInstance then return false end
+    local inside, kind = IsInInstance()
+    return (inside and kind ~= "none") and true or false
 end
 
 -- Til /gc debug ping: hvad svarer klientens lockdown-funktioner lige nu? "n/a" = findes ikke.
@@ -358,7 +383,7 @@ end
 
 local function NewScan(name, rank, maxRank)
     return { name = name, rank = rank, max = maxRank, items = {}, enchants = {}, reagents = {},
-        collapsed = false }
+        superseded = {}, collapsed = false }
 end
 
 -- Reagents gemmes som { made = antal der laves, r = { itemID, antal, itemID, antal, ... } }.
@@ -407,7 +432,15 @@ local function ReadTradeSkillMainline()
     local scan = NewScan(name, info.skillLevel or 0, info.maxSkillLevel or 0)
     for _, recipeID in ipairs(T.GetAllRecipeIDs() or {}) do
         local recipe = T.GetRecipeInfo(recipeID)
-        if recipe and recipe.learned then
+        -- Samme recipe kan findes i flere ranks (hver sit ID, samme navn, forskellig pris): i Retail
+        -- stod "Accord of Critical Strike" to gange under hinanden. Kun den højeste rank, man har lært,
+        -- er med; de lavere meldes som afløst, så de også forsvinder fra det, der allerede er gemt.
+        -- Uden nextRecipeID i klienten (felterne er ikke bekræftet for WoW Forever) er alt som før.
+        local nextID = recipe and recipe.learned and recipe.nextRecipeID
+        local nextInfo = nextID and T.GetRecipeInfo(nextID)
+        if nextInfo and nextInfo.learned then
+            scan.superseded[recipeID] = true
+        elseif recipe and recipe.learned then
             local schematic = T.GetRecipeSchematic and T.GetRecipeSchematic(recipeID, false)
             -- Faste reagents: første (laveste) kvalitet i hver påkrævet plads.
             local list, complete = {}, true

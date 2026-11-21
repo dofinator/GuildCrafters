@@ -1,6 +1,7 @@
 # GuildCrafters – SPEC v0.9
 
-> **Status:** v0.15.0 (stabilitet: sproguafhængige professioner, automatisk oprydning, pause i kamp, `/gc sync`
+> **Status:** v0.16.0 (overblik: Craft List med har/skal bruge, Mats i samme stil som Crafting, mindre støj;
+> se §7). v0.15.0 (stabilitet: sproguafhængige professioner, automatisk oprydning, pause i kamp, `/gc sync`
 > og statuslinje; se §4, §5 og §7). Alle faser + Crafting-fane med kategorier, stats-søgning, reagents-sync
 > og Craft List.
 > Testet i simulatoren (`tools/sim`, 23 scenarier / ca. 365 tjek, også sammen med udgivne 0.14-klienter).
@@ -66,6 +67,7 @@ GuildCrafters/
   Sync.lua         HELLO/INVR/REQ/DATA/GBANK, jitter, relay, online-status
   Mats.lua         scan af tasker, bank og guild bank, opt-in
   Index.lua        opslag: hvem crafter hvad, hvem har hvilke mats
+  Answer.lua       svar på "!craft <item>" i guild-chatten og whispers (fra v0.16)
   Tooltip.lua      "Crafted by" og "Guild has"
   UI/Frame.lua     vindue, faner, fælles hjælpere (ikoner, farver)
   UI/List.lua      liste med to linjer pr. række, søgefelt, whisper-menu
@@ -141,6 +143,10 @@ GuildCraftersDB = {
 - **Scan er additivt:** Et filtreret vindue eller lukkede kategorier må aldrig fjerne recipes, og
   recipes kan ikke aflæres. Lukkede kategorier foldes ud én gang pr. åbning. Rank opdateres også fra
   Skills-fanen (`SKILL_LINES_CHANGED`).
+  - Eneste undtagelse (fra v0.16.0, kun Mainline): samme recipe kan findes i flere ranks, hver med sit
+    eget ID og samme navn. Kun den højeste rank, man har lært, gemmes (`nextRecipeID` fra
+    `C_TradeSkillUI.GetRecipeInfo`), og de lavere fjernes fra det, der allerede er gemt. Har klienten
+    ikke feltet, er alt som før. To spillere med hver sin rank af samme recipe står stadig på to linjer.
 - **Oprydning (fra v0.15.0), kun lokalt:** Der sendes aldrig en sletning. En slette-markør ville
   kunne slette data hos andre ved en fejl, og 0.14-klienter kender den ikke. 0.14-klienter bliver
   derfor ved med at vise og annoncere det, en 0.15-klient har ryddet op i; det er forventet.
@@ -201,6 +207,7 @@ GuildCraftersDB = {
 | `REQ` | `c` (char), `k` (type), `h` (version vi har) | 0,5–3 s efter at en `HELLO`/`INVR` viser en nyere version. Droppes, hvis en anden har bedt om det samme |
 | `DATA` | `c`, `k`, `v`, `d` (payload) | Som svar på `REQ`: ejeren efter 0,2–1 s, egne alts efter 0,5–1,5 s, relay (kun for offline chars) efter 2–6 s |
 | `GBANK` | `s` (scan-tid), `d` (faner) | 5 s efter et ændret guild bank-scan, og når en `HELLO` viser, at afsenderen har en ældre guild bank |
+| `ANS` | `a` (spørgsmålet: afsender + tekst med små bogstaver) | Fra v0.16, `ALERT`: lige før vi svarer på "!craft" i guild-chatten, så de andre dropper deres svar (se §8a). Ældre klienter ignorerer den |
 
 **Regler**
 - **Login-storm:** Alle forsinkelser er tilfældige (jitter). Der er højst én aktiv `REQ` pr.
@@ -353,7 +360,8 @@ layoutet ud fra mockups: én linje pr. recipe, filterlinje med "Usable items" og
 +-------------------+----------------------------------------------------+
 | 4 of 52 recipes · Consumables > Flasks                                 |
 ```
-- Kolonner: **Name** (quality-farve), **Lvl** (required level; tom for enchants og ting uden krav) og
+- Kolonner: **Name** (quality-farve), **Lvl** (required level; tom for enchants og ting uden krav, og
+  hele kolonnen skjules, når intet på listen har et level, fra v0.16.0) og
   **Crafters** (korte navne, online i grøn og først, højst to og derefter "+N"; alle står i tooltippen
   og højreklik-menuen). Klik på en overskrift sorterer, klik igen vender; pilen viser den aktive.
   Crafters-sorteringen sætter det, en anden online kan lave nu, øverst. Ca. 18 rækker ad gangen.
@@ -393,7 +401,11 @@ layoutet ud fra mockups: én linje pr. recipe, filterlinje med "Usable items" og
     det, man mangler).
   - Mats: "Hi! Do you have any [Thorium Ore] to spare?"
 - `[+]` lægger itemet på craft-listen; shift-klik lægger 5 på. Står recipen allerede på listen, har
-  højreklik-menuen også "Remove from craft list".
+  højreklik-menuen også "Remove from craft list". Der kommer ingen linje i chatten (fra v0.16.0);
+  rækken viser selv "x2".
+- Reagensernes navne bestilles, når rækkerne vises, og tooltippen vises igen, når de kommer, så der
+  ikke står "Loading..." (fra v0.16.0).
+- Whisper-menuerne (alle faner) foreslår ikke ens egne chars (fra v0.16.0).
 - Søgefelterne (alle faner) har et lille "x", og Esc rydder søgningen.
 - Mens item-navne hentes fra serveren (kold cache), står der "Loading recipes..." og ikke "Nothing here".
 
@@ -401,10 +413,15 @@ layoutet ud fra mockups: én linje pr. recipe, filterlinje med "Usable items" og
 - Grupperet pr. item (valgt af brugeren efter test i spillet, hvor én samlet mats-liste var uoverskuelig):
   hver item-række (lys baggrund) har antal, `[-] [+] [x]` og status til højre: "Ready" (grøn),
   "Missing N mats" (rød) eller "Reagents unknown". Lige under står itemets mats i kolonnerne
-  **Need / You have / Guild has**.
-- Need = antal × ceil(qty / made). You have = den aktuelle chars tasker og bank (`GetItemCount`) plus egne
-  alts fra seneste scan. Bruger flere items samme mat, fordeles beholdningen ovenfra og ned, så den
-  ikke tælles to gange. Grøn = nok, rød = mangler.
+  **Have / Guild has**.
+- Have skrives som i spillets eget profession-vindue (fra v0.16.0, valgt af brugeren ud fra en
+  før/efter-skitse): "2/5" = man har 2, og itemet skal bruge 5. Skal bruge = antal × ceil(qty / made).
+  Man har = den aktuelle chars tasker og bank (`GetItemCount`) plus egne alts fra seneste scan.
+  Bruger flere items samme mat, fordeles beholdningen ovenfra og ned, så den ikke tælles to gange:
+  det afgør Ready/Missing og farven (grøn = nok, rød = mangler), mens tallet altid er alt, man har.
+  Derfor kan "6/5" stå i rød; tooltippen siger så "Set aside for items above".
+- Toplinjen lægger behovet sammen på tværs af listen: "1 of 3 ready · still to get: 12 Veiled Crystal"
+  (højst to mats, resten som "+N more").
 - Guild has: op til tre andre (og guild banken) med antal, resten som "+N". Mangler man en mat, som
   ingen har, men som nogen kan crafte (fx Bolt of Linen Cloth til en vest), står der "Bob can craft it"
   eller "You can craft it", og højreklik giver "Add 4x to craft list" og whisper til crafteren. Ellers
@@ -419,10 +436,14 @@ layoutet ud fra mockups: én linje pr. recipe, filterlinje med "Usable items" og
   foran itemet folder ud/ind (huskes resten af sessionen).
 - `[-] [+]` ændrer antal med 1, shift-klik med 5 (shift-minus går ikke under 1). "Clear list" spørger først.
 
-**Mats:**
-- Samme layout, grupperet pr. mat: "Bob 40 (bags) · Anna 120 (bank) · Guild bank 200". Højst fire
-  navne pr. række, resten som "+N more" (alle står i tooltippen).
-- Tooltippen viser, hvornår hver kilde sidst er opdateret.
+**Mats** (fra v0.16.0 i samme stil som Crafting, valgt af brugeren ud fra en før/efter-skitse):
+- Én linje pr. mat med kolonnerne **Name** og **Who has it**: "Garrosh 129, Uther 3 +1 · Guild bank 200"
+  (korte navne, online i grøn, højst fire og derefter "+N"). Klik på en overskrift sorterer; "Who has
+  it" sorterer efter, hvor meget der er i alt (mest først), uden at tallet vises. Sorteringen huskes.
+- Den char, man selv spiller, er ikke med (det står i taskerne); ens alts er. Samme regel som
+  "Guild has" i item-tooltips.
+- Tooltippen har resten: fulde navne, tasker/bank, hvornår hver kilde sidst er opdateret, og hvad man
+  selv har.
 - "Share my mats" slår deling til og fra.
 - "Only my craft list" viser kun de mats, ens craft-liste skal bruge.
 
@@ -437,6 +458,38 @@ layoutet ud fra mockups: én linje pr. recipe, filterlinje med "Usable items" og
   man selv spiller, er ikke med (det står allerede i taskerne).
 - **Kendt begrænsning:** Recipe-, pattern- og formula-items kan ikke mappes til deres produkt via API'et.
   Det løses med en lille statisk tabel senere, eller udelades.
+
+## 8a. "!craft <item>" i chatten (fra v0.16)
+
+Ønsket af en spiller på CurseForge. Format valgt af brugeren ud fra mockups (én linje, online før
+offline):
+
+```
+[Guild] Upn: !craft titans
+[Guild] Pepsi: [Flask of the Titans]: online Anna, Bob - offline Carl, Dave +2
+[Guild] Pepsi: 3 matches: Flask of the Titans, Flask of Supreme Power, Flask of Pure Death. Be more specific.
+[Guild] Pepsi: Nobody with GuildCrafters can craft "dragonscale cloak".
+```
+
+- Linjen skal starte med `!craft` (store/små bogstaver er ligegyldige). Et item- eller enchant-link
+  slås op på ID og genbruges i svaret; tekst matcher recipe-navne (præcist navn først, ellers alle ord).
+  Højst 5 navne + "+N", højst 3 navne ved flere træf, aldrig over 255 bytes. Testfigurer fra
+  `/gc debug fake` kommer aldrig med.
+- **Kun én svarer:** alle online addon-brugere i guilden sorteres efter navn; hver venter
+  1 s + 1,5 s pr. plads foran sig (+ op til 0,5 s jitter). Den, der svarer, sender `ANS` før chatlinjen,
+  og de andre dropper deres svar. Er den første i kamp, i en instance (dungeon, raid, battleground,
+  arena: guild-addon-beskeder kommer ikke altid frem der) eller har slået svar fra, svarer den næste.
+  Ser man en andens svar på samme spørgsmål i guild-chatten, dropper man også sit eget (sikring for et
+  tabt `ANS`). To svar er "det samme", når de handler om samme recipe (item-/enchant-ID eller navn foran
+  ": online"/": offline"), eller når "N matches"/"Nobody"-linjen er ens; navnene må gerne være
+  forskellige, fordi hver klient ser sin egen online-status.
+  Samme spørgsmål fra samme spiller besvares kun én gang inden for 15 s.
+- **Whisper:** "!craft <item>" som whisper til en med addonen giver svaret som whisper, kun til
+  guild-medlemmer. Kommer den i kamp, svares der efter kampen.
+- `/gc answer on|off` (gemt i `settings.answer`, til som standard): fra = man svarer aldrig selv.
+- Chatlinjen sendes med `Compat.SendChat` (`C_ChatInfo.SendChatMessage` på Retail, ellers
+  `SendChatMessage`), i `pcall`. Om Mainline/Forever tillader addons at sende i guild-chatten, er
+  ikke set i spillet endnu.
 
 ## 9. Mats-deling
 
@@ -495,6 +548,8 @@ layoutet ud fra mockups: én linje pr. recipe, filterlinje med "Usable items" og
     indlæst; roster kun med online-medlemmer; lukket overskrift i Skills; to ugers pause), kamp og
     encounter-lockdown (også rækkefølgen af beskeder lige efter kampen), `/gc tooltip`, `/gc sync`,
     statuslinjen og sikringerne omkring oprydning (scenarie 23)
+  - fra v0.16.0: "!craft" i guild-chatten og som whisper, kun én svarer, også med en 0.15-klient i
+    guilden (scenarie 25)
   - `python tools/sim/loadtest.py` måler én klient i en guild med 600 medlemmer (10 eller 200 med
     addonen): roster, søgning, tooltip, store payloads og login. Kører ikke i CI.
   
