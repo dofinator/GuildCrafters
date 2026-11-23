@@ -439,7 +439,7 @@ ns:RegisterCommand("debug", function(rest)
     elseif sub == "ping" then
         ns.debugComm = true
         ns.Comm.Ping("GUILD")
-        ns.Comm.Ping("WHISPER", UnitName("player"))
+        ns.Comm.Ping("WHISPER", ns.Compat.PlayerName())
         ns:Print("Waiting for replies... (addon message log is on)")
         C_Timer.After(5, function()
             ns:Print(string.format("Diagnosis: in guild=%s, guildKey=%s, prefix registered=%s",

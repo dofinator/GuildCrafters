@@ -24,9 +24,39 @@ end
 -- addon-brugere var det 620.000 kald pr. opdatering af Crafting-fanen. Navn og realm ændrer sig ikke
 -- efter login, så nøglen huskes derfra.
 local playerKey
+
+-- WoW Forever har "regionale" navne: realm-navnet er "", og hver char har et efternavn. UnitName giver
+-- (navn, efternavn), mens addon-beskeder, guild-rosteren og whispers bruger "Navn Efternavn" (set i
+-- spillet 2026-11-22: andre fik "Kakashi Klunkesved" som afsender, mens vi selv troede, vi hed "Kakashi";
+-- så svarede ingen på REQ for deres egne recipes, og vores eget ekko lignede en anden spiller).
+-- Andre klienter: navnet alene (UnitName("player") har ingen realm som anden værdi).
+local function SurnamesOn(second)
+    if type(second) ~= "string" or second == "" then return false end
+    if issecretvalue and issecretvalue(second) then return false end
+    if RegionalUniqueNamesEnabled then
+        local ok, on = pcall(RegionalUniqueNamesEnabled)
+        return ok and on and true or false
+    end
+    return true
+end
+
+function Compat.PlayerName()
+    local name, second = UnitName("player")
+    if SurnamesOn(second) then
+        local c = Constants and Constants.CharacterNameSeparatorConsts
+        return name .. (c and c.CHARACTERNAME_SURNAME_SEPARATOR or " ") .. second
+    end
+    return name
+end
+
+-- Nøglen fra før efternavnene ("Navn-Realm" uden efternavn); kun til at flytte gamle egne data.
+function Compat.OldPlayerKey()
+    return UnitName("player") .. "-" .. Compat.RealmName()
+end
+
 function Compat.PlayerKey()
     if playerKey then return playerKey end
-    local key = UnitName("player") .. "-" .. Compat.RealmName()
+    local key = Compat.PlayerName() .. "-" .. Compat.RealmName()
     if ns.loggedIn then playerKey = key end
     return key
 end
@@ -125,7 +155,8 @@ end
 
 -- Navn til chat/invite: uden realm, hvis det er vores egen realm.
 function Compat.ChatName(key)
-    local name, realm = key:match("^([^%-]+)%-(.+)$")
+    -- Forever: realm-navnet er "", så nøglen er "Navn Efternavn-"; whisper til "Navn Efternavn".
+    local name, realm = key:match("^([^%-]+)%-(.*)$")
     if name and realm == Compat.RealmName() then return name end
     return key
 end

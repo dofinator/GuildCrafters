@@ -407,7 +407,9 @@ C_AddOns = {
 -- Spiller, guild og talents (fra sim_me)
 ------------------------------------------------------------------------
 
-function UnitName(unit) return sim_me.name end
+-- WoW Forever: anden værdi er efternavnet (sim_me.surname), realm-navnet er "".
+function UnitName(unit) return sim_me.name, sim_me.surname end
+function RegionalUniqueNamesEnabled() return sim_me.surname ~= nil end
 function UnitClass() return sim_me.class:sub(1, 1) .. sim_me.class:sub(2):lower(), sim_me.class end
 function UnitLevel() return sim_me.level end
 function GetRealmName() return sim_me.realm end

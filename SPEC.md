@@ -113,6 +113,12 @@ GuildCraftersDB = {
 - **Nøgler:** Recipes gemmes som *created itemID* (fra `GetTradeSkillItemLink`). Enchants gemmes som
   *spellID* fra `enchant:NNNN`-linket. Navne gemmes aldrig, de resolves lokalt. Dermed er data uafhængige
   af clientens sprog.
+- **Char-nøgler:** "Navn-Realm", som afsendernavnet i addon-beskeder (`Compat.FullName`). WoW Forever har
+  regionale navne: realm-navnet er "", og hver char har et efternavn, så nøglen er "Navn Efternavn-"
+  (`UnitName("player")` giver navn og efternavn hver for sig; `Compat.PlayerName` sætter dem sammen, når
+  `RegionalUniqueNamesEnabled()` er sand). Whispers går til "Navn Efternavn". Til og med 0.17.0 manglede
+  efternavnet i egen nøgle, og nøgler med tom realm blev afvist; egne data flyttes ved login
+  (`Data:MigratePlayerKey`). 0.17.0-klienter smider REQ/DATA for Forever-nøgler væk, så alle skal opdatere.
 - **Professionsnøgler (fra v0.15.0):** Nøglen i `profs` er altid det engelske navn ("Alchemy"), uanset
   klientens sprog (`Compat.ProfessionKey`). Før var det navnet på klientens sprog, så en tysk klient
   sendte "Alchimie", som de andre hverken havde ikon eller filter til. Det engelske navn er valgt, fordi
