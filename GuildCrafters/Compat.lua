@@ -207,14 +207,63 @@ function Compat.AddMessageEventFilter(event, fn)
     return false
 end
 
--- Indsætter et link i den åbne chatboks (shift-klik).
+-- Sætter et navn i auktionshusets søgefelt, hvis auktionshuset er åbent. Mainline (retail, Forever):
+-- AuctionHouseFrame.SearchBar; Classic: BrowseName. Ikke set i spillet endnu.
+function Compat.AuctionSearch(name)
+    if type(name) ~= "string" or name == "" then return false end
+    local ah = AuctionHouseFrame
+    if ah and ah:IsShown() and ah.SearchBar then
+        if ah.SearchBar.SetSearchText then
+            ah.SearchBar:SetSearchText(name)
+            return true
+        elseif ah.SearchBar.SearchBox then
+            ah.SearchBar.SearchBox:SetText(name)
+            return true
+        end
+    end
+    if BrowseName and BrowseName:IsVisible() then
+        BrowseName:SetText(name)
+        return true
+    end
+    return false
+end
+
+-- Indsætter et link i den åbne chatboks (shift-klik). Uden åben chatboks, men med auktionshuset åbent,
+-- havner navnet i dets søgefelt, som når man shift-klikker et item i taskerne.
 local insertingOwnLink = false
 function Compat.InsertLink(link)
     local insert = (ChatFrameUtil and ChatFrameUtil.InsertLink) or ChatEdit_InsertLink
     insertingOwnLink = true      -- vores egne shift-klik skal ikke havne i søgefeltet (se HookLinkInsert)
     local ok, result = pcall(insert, link)
     insertingOwnLink = false
-    return ok and result
+    if ok and result then return true end
+    return Compat.AuctionSearch(type(link) == "string" and link:match("|h%[(.-)%]|h"))
+end
+
+-- Egne crafts: "You create: [item]x2." i loot-chatten (items) og UNIT_SPELLCAST_SUCCEEDED (enchants
+-- uden item; deres nøgle er spell-ID'et). fn(kind, id, antal).
+local function LootPattern(fmt)
+    if type(fmt) ~= "string" then return end
+    local p = fmt:gsub("[%(%)%.%%%+%-%*%?%[%]%^%$]", "%%%0")
+    p = p:gsub("%%%%s", "(.+)"):gsub("%%%%d", "(%%d+)")
+    return "^" .. p .. "$"
+end
+
+function Compat.WatchCrafts(fn)
+    local multi, single = LootPattern(LOOT_ITEM_CREATED_SELF_MULTIPLE), LootPattern(LOOT_ITEM_CREATED_SELF)
+    ns:RegisterEvent("CHAT_MSG_LOOT", function(_, text)
+        if type(text) ~= "string" or (issecretvalue and issecretvalue(text)) then return end
+        local link, n
+        if multi then link, n = text:match(multi) end
+        if not link and single then link = text:match(single) end
+        local id = link and link:match("|Hitem:(%d+)")
+        if id then fn("i", tonumber(id), tonumber(n) or 1) end
+    end)
+    ns:RegisterEvent("UNIT_SPELLCAST_SUCCEEDED", function(_, unit, _, spellID)
+        if unit ~= "player" or type(spellID) ~= "number" then return end
+        if issecretvalue and issecretvalue(spellID) then return end
+        fn("e", spellID, 1)
+    end)
 end
 
 -- Som i auktionshuset: shift-klik på et item (tasker, chat-links) uden åben chatboks kalder

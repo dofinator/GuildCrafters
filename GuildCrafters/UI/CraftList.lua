@@ -16,6 +16,7 @@ local COL = {
     qty = 262, buttons = 300,
     have = { right = 414 }, guild = 434,
 }
+local QTY_W = 74               -- bredden til "20/20 crafted" foran knapperne
 local MAX_SHORT = 2             -- mats nævnt i toplinjen ("still to get: ..."), resten som "+N more"
 
 local rows = {}
@@ -129,8 +130,13 @@ local function BuildData()
         table.insert(data, item)
 
         local made, reagents = ns.Index:Reagents(e.kind, e.id)
-        if reagents then
-            local crafts = math.ceil(e.qty / made)
+        local left = ns.Data.CraftListLeft(e)
+        if left == 0 then
+            -- Færdig ("Done"): ingen mats tilbage at skaffe, så heller ingen mat-rækker.
+            item.done, item.missing, item.folded = true, 0, true
+            ready = ready + 1
+        elseif reagents then
+            local crafts = math.ceil(left / made)
             local missing = 0
             local mats = {}
             for _, r in ipairs(reagents) do
@@ -180,7 +186,7 @@ function UI.CraftListMissing()
                 need[r.id] = 0
                 table.insert(order, r.id)
             end
-            need[r.id] = need[r.id] + r.count * math.ceil(e.qty / made)
+            need[r.id] = need[r.id] + r.count * math.ceil(ns.Data.CraftListLeft(e) / made)
         end
     end
     local list = {}
@@ -208,6 +214,8 @@ local function ItemTooltip(item, row)
             1, 1, 1, true)
     end
     GameTooltip:AddLine(" ")
+    GameTooltip:AddLine(string.format("Crafted %d of %d since you added it. It counts what you craft yourself.",
+        item.entry.done or 0, item.entry.qty), 1, 0.82, 0, true)
     GameTooltip:AddLine("Right-click: whisper a crafter", 0.5, 0.5, 0.5, true)
     GameTooltip:AddLine("Shift-click: link in chat. Ctrl-click: try it on", 0.5, 0.5, 0.5, true)
     GameTooltip:Show()
@@ -239,7 +247,8 @@ end
 
 -- Færdige whisper-tekster, fx "Hi! Could you craft 2x [Bolt of Runecloth] for me? I have the mats."
 local function CraftMessage(item)
-    local qty = item.entry.qty > 1 and (item.entry.qty .. "x ") or ""
+    local left = ns.Data.CraftListLeft(item.entry)
+    local qty = left > 1 and (left .. "x ") or ""
     local verb = item.kind == "e" and "do " or "craft "
     local text = "Hi! Could you " .. verb .. qty .. UI.ItemRef(item) .. " for me?"
     if item.missing == 0 then text = text .. " I have the mats." end
@@ -254,8 +263,12 @@ end
 
 local function OpenMenu(item, _, row)
     if item.entry then
-        UI.WhisperMenu(row, item.name, item.keys, CraftMessage(item),
-            { ns.Answer.PostMenuItem(item.kind, item.id) })
+        local extra = { ns.Answer.PostMenuItem(item.kind, item.id) }
+        if (item.entry.done or 0) > 0 then
+            table.insert(extra, { text = string.format("Craft again (0/%d)", item.entry.qty),
+                func = function() ns.Data:CraftListRestart(item.kind, item.id) end })
+        end
+        UI.WhisperMenu(row, item.name, item.keys, CraftMessage(item), extra)
         return
     end
     -- Mat: mangler man den, og kan nogen crafte den, kan den lægges på listen som sit eget punkt.
@@ -346,8 +359,17 @@ local function CreateRow(content, index)
 
     row.icon = row:CreateTexture(nil, "ARTWORK")
     row.name = Text(row, "GameFontHighlight")
-    row.qty = Text(row, "GameFontHighlightSmall")
-    row.qty:SetPoint("LEFT", COL.qty, 0)
+    -- "3/20 crafted" højrestillet op mod knapperne, med en tynd grøn bjælke nederst i rækken.
+    row.qty = Text(row, "GameFontHighlightSmall", "RIGHT")
+    row.qty:SetPoint("RIGHT", row, "LEFT", COL.buttons - 4, 0)
+    row.bar = row:CreateTexture(nil, "ARTWORK")
+    row.bar:SetPoint("BOTTOMLEFT", COL.name, 1)
+    row.bar:SetSize(COL.buttons - 4 - COL.name, 2)
+    row.bar:SetColorTexture(0.2, 0.2, 0.2, 0.9)
+    row.barFill = row:CreateTexture(nil, "OVERLAY")
+    row.barFill:SetPoint("BOTTOMLEFT", COL.name, 1)
+    row.barFill:SetHeight(2)
+    row.barFill:SetColorTexture(0.25, 0.75, 0.25, 1)
     row.status = Text(row, "GameFontHighlightSmall", "RIGHT")
     row.status:SetPoint("RIGHT", -6, 0)
     row.have = Text(row, "GameFontHighlightSmall", "RIGHT")
@@ -380,17 +402,25 @@ local function ShowItemRow(row, item)
     row.icon:Show()
     row.name:SetFontObject("GameFontHighlight")
     row.name:SetPoint("LEFT", COL.name, 0)
-    row.name:SetWidth(COL.qty - COL.name - 6)
+    row.name:SetWidth(COL.buttons - 4 - QTY_W - COL.name)
     row.name:SetText(item.title)
-    row.qty:SetText("x" .. item.entry.qty)
-    if item.unknown then
+    local done, qty = item.entry.done or 0, item.entry.qty
+    local color = item.done and "|cff40ff40" or (done > 0 and "|cffffd100" or "|cffaaaaaa")
+    row.qty:SetText(string.format("%s%d/%d crafted|r", color, done, qty))
+    local inProgress = done > 0 and not item.done
+    row.bar:SetShown(inProgress)
+    row.barFill:SetShown(inProgress)
+    if inProgress then row.barFill:SetWidth(math.max(1, (COL.buttons - 4 - COL.name) * done / qty)) end
+    if item.unknown or item.done then
         row.toggle:Hide()
     else
         local tex = item.folded and "Interface\\Buttons\\UI-PlusButton-Up" or "Interface\\Buttons\\UI-MinusButton-Up"
         row.toggle:SetNormalTexture(tex)
         row.toggle:Show()
     end
-    if item.unknown then
+    if item.done then
+        row.status:SetText("|cff40ff40Done|r")
+    elseif item.unknown then
         row.status:SetText("|cffaaaaaaReagents unknown|r")
     elseif item.missing == 0 then
         row.status:SetText("|cff40ff40Ready|r")
@@ -416,6 +446,8 @@ local function ShowMaterialRow(row, item)
     row.name:SetWidth(COL.have.right - 70 - COL.matName)
     row.name:SetText(item.title)
     row.qty:SetText("")
+    row.bar:Hide()
+    row.barFill:Hide()
     row.status:SetText("")
     row.guild:SetPoint("RIGHT", row, "RIGHT", -6, 0)
     local enough = item.have >= item.need
@@ -441,6 +473,8 @@ local function ShowNoteRow(row, item)
     row.name:SetWidth(600)
     row.name:SetText(item.note)
     row.qty:SetText("")
+    row.bar:Hide()
+    row.barFill:Hide()
     row.status:SetText("")
     row.have:SetText("")
     row.guild:SetText("")

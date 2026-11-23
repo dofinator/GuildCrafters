@@ -2777,6 +2777,146 @@ def scenario_forever_names():
     lua_errors(anna, bob)
 
 
+CRAFT_HELPERS = r"""
+sim_c = {}
+-- Craft List-rækker for items: "navn|3/20 crafted|status|bar" (bar = bredde, hvis den vises).
+function sim_c.itemRows()
+    local out = {}
+    for _, f in ipairs(sim_allFrames) do
+        local item = rawget(f, "item")
+        if item and item.entry and rawget(f, "toggle") and f:IsVisible() then
+            local bar = f.barFill:IsShown() and string.format("%.0f", f.barFill.sim_width or 0) or "-"
+            table.insert(out, table.concat({ item.name, f.qty.sim_text or "", f.status.sim_text or "", bar }, "|"))
+        end
+    end
+    return table.concat(out, "\n")
+end
+-- Mat-rækker: "navn have/need".
+function sim_c.mats()
+    local out = {}
+    for _, f in ipairs(sim_allFrames) do
+        local item = rawget(f, "item")
+        if item and not item.entry and not item.note and rawget(f, "toggle") and f:IsVisible() then
+            table.insert(out, item.name .. " " .. (f.have.sim_text or ""))
+        end
+    end
+    return table.concat(out, ";")
+end
+-- Shift-klik på trackerens række for itemID id.
+function sim_c.shiftTracker(id)
+    for _, f in ipairs(sim_allFrames) do
+        if f.sim_parent == GuildCraftersTracker and rawget(f, "id") == id and f:IsShown() then
+            sim_shift = true
+            f.sim_scripts.OnMouseUp(f, "LeftButton")
+            sim_shift = false
+            return true
+        end
+    end
+end
+"""
+
+
+def scenario_craft_progress():
+    print("\nScenarie 29: Craft List tæller det, man crafter (3/20), og trackerens shift-klik")
+    w = World()
+    me = Client(w, "Pepsi", "PRIEST", 34, profs=[dict(TAIL), dict(ENCH)], talents=(5, 31, 15),
+                bags={0: [(2589, 30)]})
+    w.clients = [me]
+    me.login()
+    me.open_trade("Tailoring")
+    me.open_craft("Enchanting")
+    w.step(5)
+    ns, L, g = me.ns, me.L, me.g
+    L.execute(UI_HELPERS)
+    L.execute(CRAFT_HELPERS)
+    c = g.sim_c
+    item_link = lambda i: f"|cffffffff|Hitem:{i}::::::::|h[{ITEMS[i][0]}]|h|r"
+    link = item_link(2996)
+
+    ns.Data.CraftListAdd(ns.Data, "i", 2996, 20)
+    me.slash("")
+    ns.UI.ShowTab(ns.UI, "Craft List")
+    w.step(2)
+    rows = lambda: [_strip(r) for r in (c.itemRows() or "").split("\n") if r]
+    check(rows() == ["Bolt of Linen Cloth|0/20 crafted|Missing 1 mat|-"], f"Ny post: 0/20 crafted ({rows()})")
+    me.slash("tracker")
+    w.step(1)
+    check(_strip(g.sim_h.tracker()) == "Linen Cloth 30/40", f"Trackeren: 30/40 ({g.sim_h.tracker()})")
+
+    def craft(n, used):
+        L.execute(f"sim_me.bags[0][1][2] = sim_me.bags[0][1][2] - {used}")
+        text = (f"You create: {link}x{n}." if n > 1 else f"You create: {link}.")
+        g.sim_fire("CHAT_MSG_LOOT", text)
+        g.sim_fire("BAG_UPDATE_DELAYED")
+        w.step(1)
+
+    craft(1, 2)
+    craft(2, 4)
+    g.sim_fire("CHAT_MSG_LOOT", "Anna creates: " + link + ".")     # en andens craft tæller ikke
+    g.sim_fire("CHAT_MSG_LOOT", "You create: " + item_link(2568) + ".")  # ikke på listen
+    w.step(1)
+    r = rows()
+    check(r and r[0].startswith("Bolt of Linen Cloth|3/20 crafted|Missing 1 mat|"),
+          f"Tre craftet (1 + 2 i én besked): 3/20 ({r})")
+    check(r and r[0].split("|")[3] != "-", f"Den grønne bjælke vises under rækken ({r})")
+    check(_strip(g.sim_h.tracker()) == "Linen Cloth 24/34", f"Mats regnes kun for de 17, der mangler ({g.sim_h.tracker()})")
+    check(_strip(c.mats()) == "Linen Cloth 24/34", f"Mat-rækken i Craft List: 24/34 ({c.mats()})")
+    check(len(ns.db.craftList) == 1 and ns.db.craftList[1].done == 3, "Fremskridtet gemmes i craft-listen")
+
+    # Trackerens shift-klik: auktionshuset (Mainline-søgefelt), Classic-søgefeltet, eller chatten.
+    L.execute("""
+        sim_ahText = nil
+        AuctionHouseFrame = CreateFrame("Frame")
+        AuctionHouseFrame.SearchBar = { SetSearchText = function(_, t) sim_ahText = t end }
+        sim_chatOpen = false
+    """)
+    c.shiftTracker(2589)
+    check(g.sim_ahText == "Linen Cloth", f"Shift-klik i trackeren søger i auktionshuset ({g.sim_ahText})")
+    L.execute("AuctionHouseFrame:Hide() BrowseName = CreateFrame('EditBox')")
+    c.shiftTracker(2589)
+    check(g.BrowseName.sim_text == "Linen Cloth", f"... også i Classic-auktionshuset ({g.BrowseName.sim_text})")
+    L.execute("sim_chatOpen = true sim_chatText = {} BrowseName:SetText('')")
+    c.shiftTracker(2589)
+    check(len(list(g.sim_chatText.values())) == 1 and g.BrowseName.sim_text == "",
+          "Med åben chatboks linkes den i chatten i stedet")
+
+    # Færdig: 20/20, "Done", en linje i chatten, og posten bliver stående.
+    me.prints.clear()
+    L.execute("sim_me.bags[0][1][2] = 40")
+    g.sim_fire("BAG_UPDATE_DELAYED")
+    craft(17, 34)
+    r = rows()
+    check(r == ["Bolt of Linen Cloth|20/20 crafted|Done|-"], f"20/20 crafted og Done ({r})")
+    check(any("20/20 crafted. Done!" in p for p in me.prints), f"En linje i chatten, når den er færdig ({me.prints})")
+    check(g.sim_h.tracker() is None and not any("all the mats" in p for p in me.prints),
+          f"Trackeren lukker uden 'all the mats', når alt er craftet ({me.prints})")
+    me.slash("tracker")
+    check("Everything on your craft list is crafted" in me.prints[-1], f"/gc tracker, når alt er craftet ({me.prints[-1]})")
+    check(c.mats() == "", f"Ingen mat-rækker under en færdig post ({c.mats()})")
+    craft(1, 0)
+    check(rows()[0].startswith("Bolt of Linen Cloth|20/20 crafted"), "Flere crafts end ønsket: bliver på 20/20")
+    menu = g.sim_h.menu("Bolt of Linen Cloth", "toggle")
+    check("Craft again (0/20)" in menu, f"Højreklik: Craft again ({menu})")
+    g.sim_h.pick("Craft again (0/20)")
+    w.step(1)
+    check(rows()[0].startswith("Bolt of Linen Cloth|0/20 crafted"), f"Craft again starter forfra ({rows()})")
+
+    # Enchants (intet item): tælles fra UNIT_SPELLCAST_SUCCEEDED.
+    ns.Data.CraftListAdd(ns.Data, "e", 7418, 2)
+    g.sim_fire("UNIT_SPELLCAST_SUCCEEDED", "player", "guid", 7418)
+    g.sim_fire("UNIT_SPELLCAST_SUCCEEDED", "target", "guid", 7418)   # ikke os
+    w.step(1)
+    e = [x for _, x in ns.db.craftList.items() if x.kind == "e"]
+    check(e and e[0].done == 1, f"Enchant tæller fra spell-cast ({e and e[0].done})")
+
+    # Mindre antal end craftet: holdes på det nye antal.
+    ns.Data.CraftListSetQty(ns.Data, "e", 7418, 1)
+    check(e[0].done == 1 and ns.Data.CraftListLeft(e[0]) == 0, "Færre end craftet: færdig")
+    saved = me.logout()
+    check("done" in saved, "Fremskridtet gemmes til næste login")
+    lua_errors(me)
+
+
 if __name__ == "__main__":
     scenario_sync()
     scenario_relay()
@@ -2805,6 +2945,7 @@ if __name__ == "__main__":
     scenario_ux3()
     scenario_not_found_filter()
     scenario_forever_names()
+    scenario_craft_progress()
     print()
     if failures:
         print(f"{len(failures)} FEJL")

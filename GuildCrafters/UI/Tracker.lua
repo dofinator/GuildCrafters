@@ -79,6 +79,30 @@ local function Create()
         row.name:SetPoint("RIGHT", row.count, "LEFT", -6, 0)
         row.name:SetJustifyH("LEFT")
         row.name:SetWordWrap(false)
+        -- Shift-klik: navnet i auktionshusets søgefelt (eller link i chatten, hvis chatboksen er åben).
+        -- Rækken tager musen, så træk i den flytter stadig hele vinduet.
+        row:EnableMouse(true)
+        row:RegisterForDrag("LeftButton")
+        row:SetScript("OnDragStart", function() tracker:StartMoving() end)
+        row:SetScript("OnDragStop", function()
+            tracker:StopMovingOrSizing()
+            SavePosition()
+        end)
+        row:SetScript("OnMouseUp", function(self, button)
+            if button == "LeftButton" and IsShiftKeyDown() and self.id then
+                local link = ns.Compat.ItemLink(self.id)
+                if link then ns.Compat.InsertLink(link) end
+            end
+        end)
+        row:SetScript("OnEnter", function(self)
+            if not self.id then return end
+            GameTooltip:SetOwner(self, "ANCHOR_LEFT")
+            GameTooltip:SetHyperlink("item:" .. self.id)
+            GameTooltip:AddLine(" ")
+            GameTooltip:AddLine("Shift-click: search the auction house (or link it in chat)", 0.5, 0.5, 0.5, true)
+            GameTooltip:Show()
+        end)
+        row:SetScript("OnLeave", function() GameTooltip:Hide() end)
         rows[i] = row
     end
     more = tracker:CreateFontString(nil, "ARTWORK", "GameFontDisableSmall")
@@ -86,19 +110,28 @@ local function Create()
     tracker:Hide()
 end
 
+-- Er der noget på craft-listen, som ikke er craftet endnu?
+local function AnythingLeft()
+    for _, e in ipairs(ns.db.craftList) do
+        if ns.Data.CraftListLeft(e) > 0 then return true end
+    end
+    return false
+end
+
 Update = function()
     if not tracker or not tracker:IsShown() then return end
     local list = UI.CraftListMissing()
     if #list == 0 then
         UI.ShowTracker(false)
-        -- En tømt liste er ikke "alt er samlet".
-        if #ns.db.craftList > 0 then ns:Print("You have all the mats for your craft list.") end
+        -- En tømt liste er ikke "alt er samlet", og når alt er craftet, har Craft List selv sagt "Done!".
+        if AnythingLeft() then ns:Print("You have all the mats for your craft list.") end
         return
     end
     local shown = math.min(#list, MAX_ROWS)
     for i, row in ipairs(rows) do
         local m = list[i]
         if m and i <= shown then
+            row.id = m.id
             row.icon:SetTexture(ns.Compat.ItemIcon(m.id))
             row.name:SetText(UI.ItemTitle(m.id, m.name))
             row.count:SetText(string.format("|cffff6060%d|r/%d", m.have, m.need))
@@ -130,7 +163,8 @@ function UI.ShowTracker(on)
             return
         end
         if #UI.CraftListMissing() == 0 then
-            ns:Print("You have all the mats for your craft list.")
+            ns:Print(AnythingLeft() and "You have all the mats for your craft list."
+                or "Everything on your craft list is crafted.")
             return
         end
     end
