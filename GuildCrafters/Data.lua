@@ -635,7 +635,32 @@ function Data:CraftListSetQty(kind, id, qty)
         table.remove(ns.db.craftList, index)
     else
         entry.qty = qty
+        if entry.done and entry.done > qty then entry.done = qty end
     end
+    ns:Fire("CRAFTLIST_CHANGED")
+end
+
+-- Fremskridt: entry.done = antal craftet, siden det kom på listen (nil = 0). Mats regnes kun for resten.
+function Data.CraftListLeft(entry)
+    return math.max(0, entry.qty - (entry.done or 0))
+end
+
+-- Kaldes, når man selv har craftet count stk. (Compat.WatchCrafts). Færdige items bliver stående som "Done".
+function Data:CraftListCrafted(kind, id, count)
+    local entry = self:CraftListFind(kind, id)
+    if not entry or Data.CraftListLeft(entry) == 0 then return end
+    entry.done = math.min(entry.qty, (entry.done or 0) + count)
+    if entry.done >= entry.qty then
+        local label = (kind == "i" and ns.Compat.ItemLink(id)) or ns.Index.Name(kind, id) or "?"
+        ns:Print(string.format("%s: %d/%d crafted. Done!", label, entry.done, entry.qty))
+    end
+    ns:Fire("CRAFTLIST_CHANGED")
+end
+
+function Data:CraftListRestart(kind, id)
+    local entry = self:CraftListFind(kind, id)
+    if not entry then return end
+    entry.done = nil
     ns:Fire("CRAFTLIST_CHANGED")
 end
 
@@ -661,6 +686,8 @@ ns:On("LOGIN", function()
         Data:HintUnscanned()
     end)
 end)
+ns.Compat.WatchCrafts(function(kind, id, count) Data:CraftListCrafted(kind, id, count) end)
+
 ns:RegisterEvent("SKILL_LINES_CHANGED", function()
     if ns.loggedIn then Data:UpdateRanks() end
 end)

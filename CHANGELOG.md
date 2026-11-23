@@ -1,9 +1,8 @@
-# GuildCrafters 0.17.1
+# GuildCrafters 0.18.0
 
-A fix for WoW Forever. **Everyone in the guild needs this version.**
+The Craft List now keeps count while you craft, and the tracker helps you shop.
 
-## Fixed
+## New
 
-- **Recipes now show up on WoW Forever.** Guild members' professions and skill levels showed, but their recipes never did. Forever names have a surname ("Name Surname"), and GuildCrafters only used the first name, so nobody answered when you asked for their recipes. Your saved data moves to the new name by itself when you log in.
-- **Whispers to guild members on WoW Forever** now go to their full name.
-- **"No player named '...' is currently playing."** no longer shows up on WoW Forever when a guild member logs off just as GuildCrafters sends them an update.
+- **Craft progress**: items on your Craft List show how many you have crafted, like "3/20 crafted", with a thin green bar. Mats are only counted for what is still left to craft. At 20/20 the item says "Done" and stays on the list. Right-click it and choose "Craft again" to start over.
+- **Shift-click in the tracker**: shift-click a mat in the "Still to get" window to put its name in the auction house search box. If the chat box is open, it links the mat in chat instead. Shift-clicking items in the GuildCrafters window works the same way.

@@ -1,6 +1,6 @@
 # GuildCrafters – SPEC v0.9
 
-> **Status:** v0.16.0 (overblik: Craft List med har/skal bruge, Mats i samme stil som Crafting, mindre støj;
+> **Status:** v0.18.0 (overblik: Craft List med har/skal bruge, Mats i samme stil som Crafting, mindre støj;
 > se §7). v0.15.0 (stabilitet: sproguafhængige professioner, automatisk oprydning, pause i kamp, `/gc sync`
 > og statuslinje; se §4, §5 og §7). Alle faser + Crafting-fane med kategorier, stats-søgning, reagents-sync
 > og Craft List.
@@ -455,11 +455,22 @@ layoutet ud fra mockups: én linje pr. recipe, filterlinje med "Usable items" og
 - Items, der er Ready, er foldet sammen til én linje, så det, man mangler, står tydeligt. `+`/`-`-knappen
   foran itemet folder ud/ind (huskes resten af sessionen).
 - `[-] [+]` ændrer antal med 1, shift-klik med 5 (shift-minus går ikke under 1). "Clear list" spørger først.
+- **Fremskridt (fra v0.18.0, valgt af brugeren ud fra mockups, mulighed A):** item-rækken viser "3/20
+  crafted" foran knapperne (grå ved 0, gul undervejs, grøn når færdig) og en tynd grøn bjælke nederst i
+  rækken. `entry.done` tæller det, man selv crafter, efter det kom på listen: items fra loot-chatten
+  ("You create: [item]x2.", `LOOT_ITEM_CREATED_SELF(_MULTIPLE)`), enchants fra `UNIT_SPELLCAST_SUCCEEDED`
+  (spell-ID = nøglen). Mats regnes kun for resten (`Data.CraftListLeft`), også i toplinjen og trackeren.
+  Færdige poster bliver stående som "Done" (grøn, uden mat-rækker) med én linje i chatten,
+  "[item]: 20/20 crafted. Done!"; højreklik "Craft again (0/20)" nulstiller. Flere crafts end ønsket
+  tæller ikke over antallet; et lavere antal end craftet gør posten færdig.
 - **Tracker (fra v0.17.0, valgt af brugeren ud fra mockups):** knappen "Tracker" (og `/gc tracker`) åbner
   et lille vindue i tooltip-stil, "Still to get", med de mats, listen mangler i alt, have/need ("0/1" med
   rødt). Højst 10 rækker + "+N more". Kan flyttes (`settings.trackerPos`), bliver stående, når
   hovedvinduet lukkes, og åbner igen ved login (`settings.tracker`). Når alt er samlet, lukker det sig
-  selv med én linje i chatten. Opdateres ved taskeændringer, data fra guilden og item-navne.
+  selv med én linje i chatten (ingen linje, når alt er craftet). Opdateres ved taskeændringer, data fra
+  guilden og item-navne. Fra v0.18.0: shift-klik på en række sætter navnet i auktionshusets søgefelt
+  (`Compat.AuctionSearch`: `AuctionHouseFrame.SearchBar` på Mainline, `BrowseName` i Classic), eller
+  linker det i chatten, hvis chatboksen er åben. Det gælder alle vores shift-klik (`Compat.InsertLink`).
 
 **Mats** (fra v0.16.0 i samme stil som Crafting, valgt af brugeren ud fra en før/efter-skitse):
 - Én linje pr. mat med kolonnerne **Name** og **Who has it**: "Garrosh 129, Uther 3 +1 · Guild bank 200"

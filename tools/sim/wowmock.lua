@@ -112,6 +112,7 @@ function Methods:GetFrameLevel() return self.sim_level end
 function Methods:SetFrameLevel(l) self.sim_level = l end
 function Methods:GetHeight() return 20 end
 function Methods:GetWidth() return 100 end
+function Methods:SetWidth(w) self.sim_width = w end
 function Methods:GetPoint() return "CENTER", UIParent, "CENTER", 0, 0 end
 function Methods:GetParent() return self.sim_parent end
 function Methods:GetChildren()
@@ -384,6 +385,9 @@ function ChatEdit_InsertLink(text)
     return true
 end
 function InviteUnit() end
+-- Loot-chatten, når man selv crafter (CHAT_MSG_LOOT), som i WoW's GlobalStrings.
+LOOT_ITEM_CREATED_SELF = "You create: %s."
+LOOT_ITEM_CREATED_SELF_MULTIPLE = "You create: %sx%d."
 sim_inCombat = false
 function InCombatLockdown() return sim_inCombat end
 
