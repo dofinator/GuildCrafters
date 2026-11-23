@@ -134,8 +134,11 @@ local function SendToPeers(text, msgType, prio)
 end
 
 -- Skjul "No player named 'X' is currently playing." for whispers, vi selv har sendt (X loggede lige af).
-if ChatFrame_AddMessageEventFilter and ERR_CHAT_PLAYER_NOT_FOUND_S then
-    ChatFrame_AddMessageEventFilter("CHAT_MSG_SYSTEM", function(_, _, text)
+-- Via Compat: på Forever/Mainline hedder funktionen ChatFrameUtil.AddMessageEventFilter.
+if ERR_CHAT_PLAYER_NOT_FOUND_S then
+    ns.Compat.AddMessageEventFilter("CHAT_MSG_SYSTEM", function(_, _, text)
+        -- En "secret" systemtekst (Forever under lockdown) må ikke sammenlignes.
+        if issecretvalue and issecretvalue(text) then return false end
         for name, at in pairs(whispered) do
             if GetTime() - at < 15 and text == ERR_CHAT_PLAYER_NOT_FOUND_S:format(name) then
                 peers[ns.Compat.FullName(name)] = nil

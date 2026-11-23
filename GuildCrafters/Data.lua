@@ -63,7 +63,35 @@ function Data:RefreshBasics()
 end
 
 local function RealmOf(key)
-    return key:match("%-(.+)$")
+    return key:match("%-(.*)$")   -- "" på Forever (se Compat.PlayerName)
+end
+
+-- Forever: egne data lå under "Navn-" (uden efternavn), før PlayerKey fik efternavnet med. Flyt dem til
+-- den nye nøgle, og fjern vores eget ekko, som blev gemt som en anden spiller under den nye nøgle.
+function Data:MigratePlayerKey()
+    local key, old = ns.Compat.PlayerKey(), ns.Compat.OldPlayerKey()
+    if key == old then return end
+    local db = ns.db
+    -- En tom post under den nye nøgle (oprettet af GetMe før login) må ikke blokere flytningen.
+    local new = db.myChars[key]
+    if db.myChars[old] and (not new or not next(new.profs or {})) then
+        db.myChars[key] = db.myChars[old]
+        db.myChars[old] = nil
+        for realm, main in pairs(db.mains) do
+            if main == old then db.mains[realm] = key end
+        end
+        local hints = {}
+        for k in pairs(db.settings.profHint) do
+            if k:sub(1, #old + 1) == old .. "/" then hints[k] = true end
+        end
+        for k in pairs(hints) do
+            db.settings.profHint[k] = nil
+            db.settings.profHint[key .. k:sub(#old + 1)] = true
+        end
+    end
+    for _, guild in pairs(db.guilds) do
+        if guild.chars then guild.chars[key] = nil end
+    end
 end
 
 -- Main for egne chars på denne realm: manuelt valgt, ellers den med højest level.
@@ -622,6 +650,7 @@ end
 
 -- SKILL_LINES_CHANGED kan komme før PLAYER_LOGIN, hvor char-nøglen endnu ikke er sikker.
 ns:On("LOGIN", function()
+    Data:MigratePlayerKey()
     Data:RefreshBasics()
     Data:MigrateProfessionKeys()
     Data:UpdateRanks()

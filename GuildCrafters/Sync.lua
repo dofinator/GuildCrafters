@@ -193,7 +193,8 @@ local function Valid(kind, d)
 end
 
 local function ValidKey(key)
-    return type(key) == "string" and key:match("^[^%-]+%-.+$") ~= nil
+    -- Realm-delen må være tom: Forever-nøgler er "Navn Efternavn-" (se Compat.PlayerName).
+    return type(key) == "string" and key:match("^[^%-]+%-.*$") ~= nil
 end
 
 ------------------------------------------------------------------------
@@ -224,7 +225,7 @@ end
 
 -- Til test uden guild: send HELLO som whisper til os selv, så hele kæden kan ses i /gc debug comm.
 function Sync:SendHelloToSelf()
-    ns.Comm:Send(BuildHello(false), "WHISPER", UnitName("player"), "NORMAL")
+    ns.Comm:Send(BuildHello(false), "WHISPER", ns.Compat.PlayerName(), "NORMAL")
 end
 
 -- Samler flere ønsker om at sende HELLO til én besked og overholder MIN_INTERVAL.
